@@ -1,4 +1,5 @@
-pub mod spaces;
+pub mod comments;
 pub mod documents;
 pub mod search;
-pub mod comments;
+pub mod spaces;
+pub mod stats;

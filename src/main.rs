@@ -20,7 +20,12 @@ use crate::{
     services::{
         database::Database,
         auth::AuthService,
+        spaces::SpaceService,
+        documents::DocumentService,
+        comments::CommentService,
+        search::SearchService,
     },
+    utils::markdown::MarkdownProcessor,
 };
 
 #[derive(Clone)]
@@ -56,6 +61,17 @@ async fn main() -> anyhow::Result<()> {
     // 创建认证服务
     let auth_service = Arc::new(AuthService::new(config.clone()));
 
+    // 创建业务服务
+    let markdown_processor = Arc::new(MarkdownProcessor::new());
+    let space_service = Arc::new(SpaceService::new(shared_db.clone(), auth_service.clone()));
+    let search_service = Arc::new(SearchService::new(shared_db.clone(), auth_service.clone()));
+    let document_service = Arc::new(DocumentService::new(
+        shared_db.clone(),
+        auth_service.clone(),
+        markdown_processor.clone(),
+    ).with_search_service(search_service.clone()));
+    let comment_service = Arc::new(CommentService::new(shared_db.clone(), auth_service.clone()));
+
     // 启动缓存清理任务
     let cleanup_auth = auth_service.clone();
     tokio::spawn(async move {
@@ -77,12 +93,17 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .nest("/api/spaces", routes::spaces::router())
         .nest("/api/docs", routes::documents::router())
-        .nest("/api/search", routes::search::router())
         .nest("/api/comments", routes::comments::router())
+        .nest("/api/search", routes::search::router())
+        .nest("/api/stats", routes::stats::router())
+        .with_state(space_service.clone())
+        .with_state(document_service.clone())
+        .with_state(comment_service.clone())
+        .with_state(search_service.clone())
+        .with_state(auth_service.clone())
         .layer(Extension(shared_db))
         .layer(Extension(Arc::new(app_state)))
         .layer(Extension(config.clone()))
-        .layer(Extension(auth_service))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
