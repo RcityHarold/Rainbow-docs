@@ -102,28 +102,467 @@ JWT_SECRET=your-jwt-secret
 
 ## API 文档
 
+### 认证
+所有API需要在请求头中包含有效的JWT token：
+```
+Authorization: Bearer <your-jwt-token>
+```
+
 ### 文档空间管理
-- `GET /api/spaces` - 获取文档空间列表
-- `POST /api/spaces` - 创建新的文档空间
-- `GET /api/spaces/{slug}` - 获取空间详情
-- `PUT /api/spaces/{slug}` - 更新空间信息
+
+#### 获取空间列表
+```http
+GET /api/spaces
+```
+
+**查询参数:**
+- `page` (可选): 页码，默认为1
+- `per_page` (可选): 每页数量，默认为20
+- `search` (可选): 搜索关键词
+
+**响应示例:**
+```json
+{
+  "spaces": [
+    {
+      "id": "space:123",
+      "name": "API Documentation",
+      "slug": "api-docs",
+      "description": "API接口文档",
+      "is_public": true,
+      "created_at": "2024-01-01T00:00:00Z",
+      "created_by": "user123"
+    }
+  ],
+  "total_count": 5,
+  "page": 1,
+  "per_page": 20
+}
+```
+
+#### 创建空间
+```http
+POST /api/spaces
+Content-Type: application/json
+```
+
+**请求体:**
+```json
+{
+  "name": "新文档空间",
+  "slug": "new-space",
+  "description": "空间描述",
+  "is_public": true
+}
+```
+
+**响应示例:**
+```json
+{
+  "id": "space:456",
+  "name": "新文档空间",
+  "slug": "new-space",
+  "description": "空间描述",
+  "is_public": true,
+  "created_at": "2024-01-15T10:30:00Z",
+  "created_by": "user123"
+}
+```
+
+#### 获取空间详情
+```http
+GET /api/spaces/{space_id}
+```
+
+#### 更新空间
+```http
+PUT /api/spaces/{space_id}
+Content-Type: application/json
+```
+
+**请求体:**
+```json
+{
+  "name": "更新的空间名称",
+  "description": "更新的描述",
+  "is_public": false
+}
+```
+
+#### 删除空间
+```http
+DELETE /api/spaces/{space_id}
+```
+
+#### 获取空间统计
+```http
+GET /api/spaces/{space_id}/stats
+```
 
 ### 文档管理
-- `GET /api/spaces/{space}/docs` - 获取文档列表
-- `POST /api/spaces/{space}/docs` - 创建新文档
-- `GET /api/spaces/{space}/docs/{slug}` - 获取文档内容
-- `PUT /api/spaces/{space}/docs/{slug}` - 更新文档
-- `DELETE /api/spaces/{space}/docs/{slug}` - 删除文档
+
+#### 获取文档列表
+```http
+GET /api/docs
+```
+
+**查询参数:**
+- `space_id` (可选): 空间ID
+- `page` (可选): 页码，默认为1
+- `per_page` (可选): 每页数量，默认为20
+- `parent_id` (可选): 父文档ID
+
+#### 创建文档
+```http
+POST /api/docs
+Content-Type: application/json
+```
+
+**请求体:**
+```json
+{
+  "space_id": "space:123",
+  "title": "新文档标题",
+  "slug": "new-document",
+  "content": "# 文档内容\n\n这是文档内容...",
+  "description": "文档描述",
+  "parent_id": "doc:parent",
+  "is_public": true
+}
+```
+
+#### 获取文档详情
+```http
+GET /api/docs/{document_id}
+```
+
+#### 更新文档
+```http
+PUT /api/docs/{document_id}
+Content-Type: application/json
+```
+
+**请求体:**
+```json
+{
+  "title": "更新的标题",
+  "content": "更新的内容",
+  "description": "更新的描述",
+  "is_public": false
+}
+```
+
+#### 删除文档
+```http
+DELETE /api/docs/{document_id}
+```
+
+#### 移动文档
+```http
+PUT /api/docs/{document_id}/move
+Content-Type: application/json
+```
+
+**请求体:**
+```json
+{
+  "new_parent_id": "doc:new_parent",
+  "new_order_index": 5
+}
+```
+
+#### 复制文档
+```http
+POST /api/docs/{document_id}/duplicate
+Content-Type: application/json
+```
+
+**请求体:**
+```json
+{
+  "title": "复制的文档标题",
+  "slug": "duplicated-document"
+}
+```
+
+#### 获取文档面包屑
+```http
+GET /api/docs/{document_id}/breadcrumbs
+```
+
+#### 获取文档子页面
+```http
+GET /api/docs/{document_id}/children
+```
+
+### 版本控制
+
+#### 获取文档版本列表
+```http
+GET /api/versions/{document_id}/versions
+```
+
+**查询参数:**
+- `page` (可选): 页码，默认为1
+- `per_page` (可选): 每页数量，默认为20
+- `author_id` (可选): 按作者筛选
+
+#### 创建新版本
+```http
+POST /api/versions/{document_id}/versions
+Content-Type: application/json
+```
+
+**请求体:**
+```json
+{
+  "title": "文档标题",
+  "content": "文档内容",
+  "summary": "本次更改的描述",
+  "change_type": "Updated"
+}
+```
+
+**change_type 可选值:** `Created`, `Updated`, `Restored`, `Merged`
+
+#### 获取当前版本
+```http
+GET /api/versions/{document_id}/versions/current
+```
+
+#### 获取特定版本
+```http
+GET /api/versions/{document_id}/versions/{version_id}
+```
+
+#### 恢复版本
+```http
+POST /api/versions/{document_id}/versions/{version_id}/restore
+Content-Type: application/json
+```
+
+**请求体:**
+```json
+{
+  "summary": "恢复到版本 3"
+}
+```
+
+#### 比较版本
+```http
+GET /api/versions/{document_id}/versions/compare?from_version={version_id_1}&to_version={version_id_2}
+```
+
+#### 获取版本历史摘要
+```http
+GET /api/versions/{document_id}/versions/summary
+```
+
+#### 删除版本
+```http
+DELETE /api/versions/{document_id}/versions/{version_id}
+```
 
 ### 搜索功能
-- `GET /api/search` - 全文搜索
-- `GET /api/search/suggestions` - 搜索建议
+
+#### 全文搜索
+```http
+GET /api/search
+```
+
+**查询参数:**
+- `q`: 搜索关键词 (必需)
+- `space_id` (可选): 限制在特定空间内搜索
+- `tags` (可选): 按标签筛选，逗号分隔
+- `author_id` (可选): 按作者筛选
+- `page` (可选): 页码，默认为1
+- `per_page` (可选): 每页数量，默认为20
+- `sort` (可选): 排序方式 (`relevance`, `created_at`, `updated_at`, `title`)
+
+**响应示例:**
+```json
+{
+  "results": [
+    {
+      "document_id": "doc:123",
+      "space_id": "space:456",
+      "title": "API文档",
+      "excerpt": "...包含搜索关键词的摘要...",
+      "tags": ["api", "documentation"],
+      "author_id": "user123",
+      "last_updated": "2024-01-15T10:30:00Z",
+      "score": 95.5,
+      "highlights": [
+        {
+          "field": "title",
+          "text": "API文档",
+          "start": 0,
+          "end": 5
+        }
+      ]
+    }
+  ],
+  "total_count": 42,
+  "page": 1,
+  "per_page": 20,
+  "total_pages": 3,
+  "query": "API",
+  "took": 15
+}
+```
+
+#### 搜索建议
+```http
+GET /api/search/suggest?q={prefix}&limit=10
+```
+
+#### 重建搜索索引
+```http
+POST /api/search/reindex
+```
+
+#### 空间内搜索
+```http
+GET /api/search/spaces/{space_id}?q={query}
+```
+
+#### 按标签搜索
+```http
+GET /api/search/tags?tags={tag1,tag2}
+```
 
 ### 评论系统
-- `GET /api/docs/{id}/comments` - 获取评论列表
-- `POST /api/docs/{id}/comments` - 添加评论
-- `PUT /api/comments/{id}` - 更新评论
-- `DELETE /api/comments/{id}` - 删除评论
+
+#### 获取文档评论列表
+```http
+GET /api/comments/document/{document_id}
+```
+
+**查询参数:**
+- `page` (可选): 页码，默认为1
+- `per_page` (可选): 每页数量，默认为20
+- `sort` (可选): 排序方式
+
+#### 创建评论
+```http
+POST /api/comments/document/{document_id}
+Content-Type: application/json
+```
+
+**请求体:**
+```json
+{
+  "content": "这是一条评论",
+  "parent_id": "comment:parent"
+}
+```
+
+#### 获取评论详情
+```http
+GET /api/comments/{comment_id}
+```
+
+#### 更新评论
+```http
+PUT /api/comments/{comment_id}
+Content-Type: application/json
+```
+
+**请求体:**
+```json
+{
+  "content": "更新的评论内容"
+}
+```
+
+#### 删除评论
+```http
+DELETE /api/comments/{comment_id}
+```
+
+#### 获取评论回复
+```http
+GET /api/comments/{comment_id}/replies
+```
+
+#### 点赞/取消点赞评论
+```http
+POST /api/comments/{comment_id}/like
+```
+
+### 统计信息
+
+#### 获取搜索统计
+```http
+GET /api/stats/search
+```
+
+**响应示例:**
+```json
+{
+  "total_documents": 156,
+  "total_searches_today": 42,
+  "most_searched_terms": [
+    {
+      "term": "API documentation",
+      "count": 15
+    }
+  ],
+  "recent_searches": [
+    {
+      "query": "user management",
+      "results_count": 7,
+      "timestamp": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+```
+
+#### 获取文档统计
+```http
+GET /api/stats/documents
+```
+
+**响应示例:**
+```json
+{
+  "total_documents": 156,
+  "total_spaces": 12,
+  "total_comments": 89,
+  "documents_created_today": 3,
+  "most_active_spaces": [
+    {
+      "space_id": "space_1",
+      "space_name": "API Documentation",
+      "document_count": 45,
+      "recent_activity": 12
+    }
+  ]
+}
+```
+
+## 错误处理
+
+API使用标准HTTP状态码，错误响应格式：
+
+```json
+{
+  "error": "错误类型",
+  "message": "详细错误信息",
+  "details": "额外的错误详情"
+}
+```
+
+常见状态码：
+- `200` - 成功
+- `201` - 创建成功
+- `204` - 删除成功
+- `400` - 请求参数错误
+- `401` - 未认证
+- `403` - 权限不足
+- `404` - 资源不存在
+- `409` - 资源冲突
+- `500` - 服务器内部错误
 
 ## 数据库架构
 
@@ -145,9 +584,29 @@ src/
 ├── config.rs            # 配置管理
 ├── error.rs             # 错误处理
 ├── models/              # 数据模型
+│   ├── space.rs         # 空间模型
+│   ├── document.rs      # 文档模型
+│   ├── version.rs       # 版本模型
+│   ├── comment.rs       # 评论模型
+│   ├── permission.rs    # 权限模型
+│   ├── tag.rs          # 标签模型
+│   └── search.rs       # 搜索模型
 ├── routes/              # 路由处理
+│   ├── spaces.rs       # 空间路由
+│   ├── documents.rs    # 文档路由
+│   ├── versions.rs     # 版本路由
+│   ├── comments.rs     # 评论路由
+│   ├── search.rs       # 搜索路由
+│   └── stats.rs        # 统计路由
 ├── services/            # 业务逻辑
+│   ├── auth.rs         # 认证服务
+│   ├── spaces.rs       # 空间服务
+│   ├── documents.rs    # 文档服务
+│   ├── versions.rs     # 版本服务
+│   ├── comments.rs     # 评论服务
+│   └── search.rs       # 搜索服务
 └── utils/               # 工具函数
+    └── markdown.rs     # Markdown处理
 ```
 
 ### 添加新功能

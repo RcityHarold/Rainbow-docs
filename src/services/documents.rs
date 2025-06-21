@@ -6,7 +6,8 @@ use crate::{
     error::ApiError,
     models::document::{Document, CreateDocumentRequest, UpdateDocumentRequest},
     models::search::SearchIndex,
-    services::{auth::AuthService, search::SearchService},
+    models::version::{CreateVersionRequest, VersionChangeType},
+    services::{auth::AuthService, search::SearchService, versions::VersionService},
     utils::markdown::MarkdownProcessor,
 };
 
@@ -16,6 +17,7 @@ pub struct DocumentService {
     auth_service: Arc<AuthService>,
     markdown_processor: Arc<MarkdownProcessor>,
     search_service: Option<Arc<SearchService>>,
+    version_service: Option<Arc<VersionService>>,
 }
 
 impl DocumentService {
@@ -29,11 +31,17 @@ impl DocumentService {
             auth_service,
             markdown_processor,
             search_service: None,
+            version_service: None,
         }
     }
 
     pub fn with_search_service(mut self, search_service: Arc<SearchService>) -> Self {
         self.search_service = Some(search_service);
+        self
+    }
+
+    pub fn with_version_service(mut self, version_service: Arc<VersionService>) -> Self {
+        self.version_service = Some(version_service);
         self
     }
 
@@ -110,6 +118,22 @@ impl DocumentService {
             ).await;
         }
 
+        // 创建初始版本
+        if let Some(version_service) = &self.version_service {
+            let version_request = CreateVersionRequest {
+                title: created_document.title.clone(),
+                content: created_document.content.clone(),
+                summary: Some("Initial version".to_string()),
+                change_type: VersionChangeType::Created,
+            };
+            
+            let _ = version_service.create_version(
+                &created_document.id.as_ref().unwrap().to_string(),
+                author_id,
+                version_request,
+            ).await;
+        }
+
         Ok(created_document)
     }
 
@@ -175,6 +199,22 @@ impl DocumentService {
                 Vec::new(), // 标签将在后续更新
                 &updated_document.author_id,
                 updated_document.is_public,
+            ).await;
+        }
+
+        // 创建新版本
+        if let Some(version_service) = &self.version_service {
+            let version_request = CreateVersionRequest {
+                title: updated_document.title.clone(),
+                content: updated_document.content.clone(),
+                summary: Some("Document updated".to_string()),
+                change_type: VersionChangeType::Updated,
+            };
+            
+            let _ = version_service.create_version(
+                document_id,
+                editor_id,
+                version_request,
             ).await;
         }
 

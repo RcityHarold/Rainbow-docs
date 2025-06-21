@@ -24,6 +24,7 @@ use crate::{
         documents::DocumentService,
         comments::CommentService,
         search::SearchService,
+        versions::VersionService,
     },
     utils::markdown::MarkdownProcessor,
 };
@@ -65,11 +66,12 @@ async fn main() -> anyhow::Result<()> {
     let markdown_processor = Arc::new(MarkdownProcessor::new());
     let space_service = Arc::new(SpaceService::new(shared_db.clone(), auth_service.clone()));
     let search_service = Arc::new(SearchService::new(shared_db.clone(), auth_service.clone()));
+    let version_service = Arc::new(VersionService::new(shared_db.clone(), auth_service.clone()));
     let document_service = Arc::new(DocumentService::new(
         shared_db.clone(),
         auth_service.clone(),
         markdown_processor.clone(),
-    ).with_search_service(search_service.clone()));
+    ).with_search_service(search_service.clone()).with_version_service(version_service.clone()));
     let comment_service = Arc::new(CommentService::new(shared_db.clone(), auth_service.clone()));
 
     // 启动缓存清理任务
@@ -96,10 +98,12 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/comments", routes::comments::router())
         .nest("/api/search", routes::search::router())
         .nest("/api/stats", routes::stats::router())
+        .nest("/api/versions", routes::versions::router())
         .with_state(space_service.clone())
         .with_state(document_service.clone())
         .with_state(comment_service.clone())
         .with_state(search_service.clone())
+        .with_state(version_service.clone())
         .with_state(auth_service.clone())
         .layer(Extension(shared_db))
         .layer(Extension(Arc::new(app_state)))
