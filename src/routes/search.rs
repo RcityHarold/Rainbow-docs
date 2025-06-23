@@ -199,7 +199,7 @@ pub async fn search_by_tags(
     Ok(Json(response))
 }
 
-pub fn router() -> Router {
+pub fn router() -> Router<Arc<crate::AppState>> {
     Router::new()
         .route("/", get(search_documents))
         .route("/suggest", get(search_suggestions))

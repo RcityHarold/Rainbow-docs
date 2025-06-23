@@ -99,4 +99,31 @@ impl IntoResponse for AppError {
     }
 }
 
+impl AppError {
+    pub fn bad_request(msg: impl Into<String>) -> Self {
+        Self::Validation(msg.into())
+    }
+    
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        Self::Authentication(msg.into())
+    }
+    
+    pub fn forbidden(msg: impl Into<String>) -> Self {
+        Self::Authorization(msg.into())
+    }
+    
+    pub fn not_found(msg: impl Into<String>) -> Self {
+        Self::NotFound(msg.into())
+    }
+    
+    pub fn conflict(msg: impl Into<String>) -> Self {
+        Self::Conflict(msg.into())
+    }
+    
+    pub fn internal_server_error(msg: impl Into<String>) -> Self {
+        Self::Internal(anyhow::anyhow!(msg.into()))
+    }
+}
+
 pub type Result<T> = std::result::Result<T, AppError>;
+pub type ApiError = AppError;

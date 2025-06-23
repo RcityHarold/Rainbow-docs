@@ -250,7 +250,7 @@ pub struct DateRangeQuery {
     pub to_date: Option<String>,
 }
 
-pub fn router() -> Router {
+pub fn router() -> Router<Arc<crate::AppState>> {
     Router::new()
         .route("/:document_id/versions", get(get_document_versions).post(create_document_version))
         .route("/:document_id/versions/current", get(get_current_version))

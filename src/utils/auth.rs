@@ -1,55 +1,20 @@
 use crate::error::{AppError, Result};
-use crate::services::auth::User;
+use crate::services::auth::{User, AuthService};
 use axum::{
-    extract::Request,
-    http::StatusCode,
-    middleware::Next,
+    http::{StatusCode, HeaderMap},
     response::Response,
 };
 use std::collections::HashSet;
+use std::sync::Arc;
 
-/// 权限检查中间件
-pub async fn require_permission(
-    permission: &str,
-) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, AppError>> + Send>> + Clone {
-    let permission = permission.to_string();
-    move |req: Request, next: Next| {
-        let permission = permission.clone();
-        Box::pin(async move {
-            // 从请求中提取用户信息
-            let user = req.extensions().get::<User>()
-                .ok_or_else(|| AppError::Authentication("User not authenticated".to_string()))?;
-
-            // 检查权限
-            if !user.permissions.contains(&permission) {
-                return Err(AppError::Authorization(format!("Permission {} required", permission)));
-            }
-
-            Ok(next.run(req).await)
-        })
-    }
+/// 检查用户是否有指定权限
+pub fn has_permission(user: &User, permission: &str) -> bool {
+    user.permissions.contains(&permission.to_string())
 }
 
-/// 角色检查中间件
-pub async fn require_role(
-    role: &str,
-) -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, AppError>> + Send>> + Clone {
-    let role = role.to_string();
-    move |req: Request, next: Next| {
-        let role = role.clone();
-        Box::pin(async move {
-            // 从请求中提取用户信息
-            let user = req.extensions().get::<User>()
-                .ok_or_else(|| AppError::Authentication("User not authenticated".to_string()))?;
-
-            // 检查角色
-            if !user.roles.contains(&role) {
-                return Err(AppError::Authorization(format!("Role {} required", role)));
-            }
-
-            Ok(next.run(req).await)
-        })
-    }
+/// 检查用户是否有指定角色
+pub fn has_role(user: &User, role: &str) -> bool {
+    user.roles.contains(&role.to_string())
 }
 
 /// 管理员权限检查
@@ -93,140 +58,72 @@ pub enum DocumentPermission {
     Admin,
 }
 
-impl DocumentPermission {
-    pub fn from_string(s: &str) -> Option<Self> {
-        match s {
-            "read" => Some(Self::Read),
-            "write" => Some(Self::Write),
-            "admin" => Some(Self::Admin),
-            _ => None,
+/// 检查用户是否有特定文档权限
+pub fn has_document_permission(
+    user: &User,
+    permission: DocumentPermission,
+    document_owner_id: Option<&str>,
+) -> bool {
+    match permission {
+        DocumentPermission::Read => {
+            can_read_document(user) || 
+            document_owner_id.map_or(false, |owner| user.id == owner)
         }
-    }
-
-    pub fn to_string(&self) -> &'static str {
-        match self {
-            Self::Read => "read",
-            Self::Write => "write",
-            Self::Admin => "admin",
+        DocumentPermission::Write => {
+            can_write_document(user) || 
+            document_owner_id.map_or(false, |owner| user.id == owner)
         }
-    }
-
-    /// 检查权限是否包含另一个权限
-    pub fn includes(&self, other: &DocumentPermission) -> bool {
-        match (self, other) {
-            (DocumentPermission::Admin, _) => true,
-            (DocumentPermission::Write, DocumentPermission::Read) => true,
-            (DocumentPermission::Write, DocumentPermission::Write) => true,
-            (DocumentPermission::Read, DocumentPermission::Read) => true,
-            _ => false,
+        DocumentPermission::Admin => {
+            can_admin_document(user)
         }
     }
 }
 
-/// 权限验证宏
-#[macro_export]
-macro_rules! require_permission {
-    ($user:expr, $permission:expr) => {
-        if !$user.permissions.contains(&$permission.to_string()) {
-            return Err(AppError::Authorization(format!("Permission {} required", $permission)));
-        }
-    };
-}
+/// 从请求头中提取用户ID
+pub async fn extract_user_from_header(
+    headers: &HeaderMap,
+    auth_service: &Arc<AuthService>,
+) -> Result<String, AppError> {
+    let auth_header = headers
+        .get("Authorization")
+        .and_then(|header| header.to_str().ok())
+        .ok_or_else(|| AppError::unauthorized("Authorization header missing"))?;
 
-#[macro_export]
-macro_rules! require_role {
-    ($user:expr, $role:expr) => {
-        if !$user.roles.contains(&$role.to_string()) {
-            return Err(AppError::Authorization(format!("Role {} required", $role)));
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! require_admin {
-    ($user:expr) => {
-        if !($user.roles.contains(&"admin".to_string()) || 
-             $user.permissions.contains(&"docs.admin".to_string())) {
-            return Err(AppError::Authorization("Admin permission required".to_string()));
-        }
-    };
-}
-
-/// JWT Token 工具函数
-pub mod jwt {
-    use crate::config::Config;
-    use crate::error::{AppError, Result};
-    use crate::services::auth::Claims;
-    use jsonwebtoken::{encode, EncodingKey, Header, Algorithm};
-    use chrono::{Utc, Duration};
-
-    /// 生成 JWT Token（独立模式使用）
-    pub fn generate_token(config: &Config, user_id: &str, email: &str, roles: Vec<String>, permissions: Vec<String>) -> Result<String> {
-        let now = Utc::now();
-        let exp = (now + Duration::seconds(config.auth.jwt_expiration as i64)).timestamp() as usize;
-        let iat = now.timestamp() as usize;
-
-        let claims = Claims {
-            sub: user_id.to_string(),
-            email: email.to_string(),
-            exp,
-            iat,
-            roles,
-            permissions,
-        };
-
-        let encoding_key = EncodingKey::from_secret(config.auth.jwt_secret.as_ref());
-        let header = Header::new(Algorithm::HS256);
-
-        encode(&header, &claims, &encoding_key)
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to generate token: {}", e)))
+    if !auth_header.starts_with("Bearer ") {
+        return Err(AppError::unauthorized("Invalid authorization header format"));
     }
+
+    let token = &auth_header[7..]; // Remove "Bearer " prefix
+    
+    // Validate token and extract user ID
+    let user = auth_service.validate_token(token).await
+        .map_err(|_| AppError::unauthorized("Invalid token"))?;
+    
+    Ok(user.id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_document_permission_includes() {
-        assert!(DocumentPermission::Admin.includes(&DocumentPermission::Read));
-        assert!(DocumentPermission::Admin.includes(&DocumentPermission::Write));
-        assert!(DocumentPermission::Admin.includes(&DocumentPermission::Admin));
-        
-        assert!(DocumentPermission::Write.includes(&DocumentPermission::Read));
-        assert!(DocumentPermission::Write.includes(&DocumentPermission::Write));
-        assert!(!DocumentPermission::Write.includes(&DocumentPermission::Admin));
-        
-        assert!(DocumentPermission::Read.includes(&DocumentPermission::Read));
-        assert!(!DocumentPermission::Read.includes(&DocumentPermission::Write));
-        assert!(!DocumentPermission::Read.includes(&DocumentPermission::Admin));
+    fn create_test_user(id: &str, roles: Vec<&str>, permissions: Vec<&str>) -> User {
+        User {
+            id: id.to_string(),
+            username: format!("user_{}", id),
+            email: format!("{}@example.com", id),
+            roles: roles.into_iter().map(|s| s.to_string()).collect(),
+            permissions: permissions.into_iter().map(|s| s.to_string()).collect(),
+            is_active: true,
+            last_login: None,
+            created_at: chrono::Utc::now(),
+        }
     }
 
     #[test]
-    fn test_permission_functions() {
-        let admin_user = User {
-            id: "admin_1".to_string(),
-            email: "admin@example.com".to_string(),
-            roles: vec!["admin".to_string()],
-            permissions: vec!["docs.admin".to_string()],
-            profile: None,
-        };
-
-        let writer_user = User {
-            id: "writer_1".to_string(),
-            email: "writer@example.com".to_string(),
-            roles: vec!["writer".to_string()],
-            permissions: vec!["docs.read".to_string(), "docs.write".to_string()],
-            profile: None,
-        };
-
-        let reader_user = User {
-            id: "reader_1".to_string(),
-            email: "reader@example.com".to_string(),
-            roles: vec!["user".to_string()],
-            permissions: vec!["docs.read".to_string()],
-            profile: None,
-        };
+    fn test_permission_checks() {
+        let admin_user = create_test_user("1", vec!["admin"], vec!["docs.admin"]);
+        let writer_user = create_test_user("2", vec!["writer"], vec!["docs.write"]);
+        let reader_user = create_test_user("3", vec!["reader"], vec!["docs.read"]);
 
         // Test admin permissions
         assert!(can_read_document(&admin_user));

@@ -192,7 +192,7 @@ pub async fn toggle_comment_like(
     Ok(Json(updated_comment))
 }
 
-pub fn router() -> Router {
+pub fn router() -> Router<Arc<crate::AppState>> {
     Router::new()
         .route("/document/:document_id", get(get_document_comments).post(create_comment))
         .route("/:comment_id", get(get_comment).put(update_comment).delete(delete_comment))

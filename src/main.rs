@@ -25,6 +25,8 @@ use crate::{
         comments::CommentService,
         search::SearchService,
         versions::VersionService,
+        tags::TagService,
+        file_upload::FileUploadService,
     },
     utils::markdown::MarkdownProcessor,
 };
@@ -34,6 +36,13 @@ pub struct AppState {
     pub db: Database,
     pub config: Config,
     pub auth_service: Arc<AuthService>,
+    pub space_service: Arc<SpaceService>,
+    pub file_upload_service: Arc<FileUploadService>,
+    pub tag_service: Arc<TagService>,
+    pub document_service: Arc<DocumentService>,
+    pub comment_service: Arc<CommentService>,
+    pub search_service: Arc<SearchService>,
+    pub version_service: Arc<VersionService>,
 }
 
 #[tokio::main]
@@ -63,8 +72,11 @@ async fn main() -> anyhow::Result<()> {
     let auth_service = Arc::new(AuthService::new(config.clone()));
 
     // 创建业务服务
+    let space_service = Arc::new(SpaceService::new(shared_db.clone()));
+    let file_upload_service = Arc::new(FileUploadService::new(shared_db.clone(), auth_service.clone()));
+    let tag_service = Arc::new(TagService::new(shared_db.clone(), auth_service.clone()));
+    
     let markdown_processor = Arc::new(MarkdownProcessor::new());
-    let space_service = Arc::new(SpaceService::new(shared_db.clone(), auth_service.clone()));
     let search_service = Arc::new(SearchService::new(shared_db.clone(), auth_service.clone()));
     let version_service = Arc::new(VersionService::new(shared_db.clone(), auth_service.clone()));
     let document_service = Arc::new(DocumentService::new(
@@ -89,24 +101,27 @@ async fn main() -> anyhow::Result<()> {
         db,
         config: config.clone(),
         auth_service: auth_service.clone(),
+        space_service: space_service.clone(),
+        file_upload_service: file_upload_service.clone(),
+        tag_service: tag_service.clone(),
+        document_service: document_service.clone(),
+        comment_service: comment_service.clone(),
+        search_service: search_service.clone(),
+        version_service: version_service.clone(),
     };
 
     // 创建路由
     let app = Router::new()
         .nest("/api/spaces", routes::spaces::router())
+        .nest("/api/files", routes::files::router())
+        .nest("/api/tags", routes::tags::router())
         .nest("/api/docs", routes::documents::router())
         .nest("/api/comments", routes::comments::router())
         .nest("/api/search", routes::search::router())
         .nest("/api/stats", routes::stats::router())
         .nest("/api/versions", routes::versions::router())
-        .with_state(space_service.clone())
-        .with_state(document_service.clone())
-        .with_state(comment_service.clone())
-        .with_state(search_service.clone())
-        .with_state(version_service.clone())
-        .with_state(auth_service.clone())
+        .with_state(Arc::new(app_state))
         .layer(Extension(shared_db))
-        .layer(Extension(Arc::new(app_state)))
         .layer(Extension(config.clone()))
         .layer(
             CorsLayer::new()

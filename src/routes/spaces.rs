@@ -1,8 +1,6 @@
-use crate::error::{AppError, Result};
+use crate::{AppState, error::{AppError, Result}};
 use crate::models::space::{CreateSpaceRequest, UpdateSpaceRequest, SpaceListQuery};
 use crate::services::auth::{User, OptionalUser};
-use crate::services::database::Database;
-use crate::services::spaces::SpaceService;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -14,7 +12,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{info, warn};
 
-pub fn router() -> Router {
+pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_spaces).post(create_space))
         .route("/:slug", get(get_space).put(update_space).delete(delete_space))
@@ -24,12 +22,11 @@ pub fn router() -> Router {
 /// 获取空间列表
 /// GET /api/spaces
 async fn list_spaces(
-    State(db): State<Arc<Database>>,
+    State(app_state): State<Arc<AppState>>,
     Query(query): Query<SpaceListQuery>,
     OptionalUser(user): OptionalUser,
 ) -> Result<Json<Value>> {
-    let space_service = SpaceService::new(db);
-    let result = space_service.list_spaces(query, user.as_ref()).await?;
+    let result = app_state.space_service.list_spaces(query, user.as_ref()).await?;
 
     Ok(Json(json!({
         "success": true,
@@ -41,7 +38,7 @@ async fn list_spaces(
 /// 创建新空间
 /// POST /api/spaces
 async fn create_space(
-    State(db): State<Arc<Database>>,
+    State(app_state): State<Arc<AppState>>,
     user: User,
     Json(request): Json<CreateSpaceRequest>,
 ) -> Result<Json<Value>> {
@@ -49,9 +46,7 @@ async fn create_space(
     if !user.permissions.contains(&"spaces.write".to_string()) && !user.permissions.contains(&"docs.admin".to_string()) {
         return Err(AppError::Authorization("Permission denied: spaces.write required".to_string()));
     }
-
-    let space_service = SpaceService::new(db);
-    let result = space_service.create_space(request, &user).await?;
+    let result = app_state.space_service.create_space(request, &user).await?;
 
     info!("User {} created space: {}", user.id, result.slug);
 
@@ -65,12 +60,11 @@ async fn create_space(
 /// 获取空间详情
 /// GET /api/spaces/:slug
 async fn get_space(
-    State(db): State<Arc<Database>>,
+    State(app_state): State<Arc<AppState>>,
     Path(slug): Path<String>,
     OptionalUser(user): OptionalUser,
 ) -> Result<Json<Value>> {
-    let space_service = SpaceService::new(db);
-    let result = space_service.get_space_by_slug(&slug, user.as_ref()).await?;
+    let result = app_state.space_service.get_space_by_slug(&slug, user.as_ref()).await?;
 
     Ok(Json(json!({
         "success": true,
@@ -82,13 +76,12 @@ async fn get_space(
 /// 更新空间信息
 /// PUT /api/spaces/:slug
 async fn update_space(
-    State(db): State<Arc<Database>>,
+    State(app_state): State<Arc<AppState>>,
     Path(slug): Path<String>,
     user: User,
     Json(request): Json<UpdateSpaceRequest>,
 ) -> Result<Json<Value>> {
-    let space_service = SpaceService::new(db);
-    let result = space_service.update_space(&slug, request, &user).await?;
+    let result = app_state.space_service.update_space(&slug, request, &user).await?;
 
     info!("User {} updated space: {}", user.id, slug);
 
@@ -102,12 +95,11 @@ async fn update_space(
 /// 删除空间
 /// DELETE /api/spaces/:slug
 async fn delete_space(
-    State(db): State<Arc<Database>>,
+    State(app_state): State<Arc<AppState>>,
     Path(slug): Path<String>,
     user: User,
 ) -> Result<Json<Value>> {
-    let space_service = SpaceService::new(db);
-    space_service.delete_space(&slug, &user).await?;
+    app_state.space_service.delete_space(&slug, &user).await?;
 
     info!("User {} deleted space: {}", user.id, slug);
 
@@ -121,14 +113,12 @@ async fn delete_space(
 /// 获取空间统计信息
 /// GET /api/spaces/:slug/stats
 async fn get_space_stats(
-    State(db): State<Arc<Database>>,
+    State(app_state): State<Arc<AppState>>,
     Path(slug): Path<String>,
     OptionalUser(user): OptionalUser,
 ) -> Result<Json<Value>> {
-    let space_service = SpaceService::new(db);
-    
     // 首先检查用户是否有访问空间的权限
-    let space = space_service.get_space_by_slug(&slug, user.as_ref()).await?;
+    let space = app_state.space_service.get_space_by_slug(&slug, user.as_ref()).await?;
     
     // 统计信息已经包含在空间响应中
     let stats = space.stats.unwrap_or_default();

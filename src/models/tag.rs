@@ -1,6 +1,15 @@
 use serde::{Deserialize, Serialize};
 use surrealdb::sql::{Datetime, Thing};
 use validator::Validate;
+use regex::Regex;
+
+lazy_static::lazy_static! {
+    static ref HEX_COLOR_REGEX: Regex = Regex::new(r"^#[0-9A-Fa-f]{6}$").unwrap();
+}
+
+pub fn hex_color_regex() -> &'static Regex {
+    &HEX_COLOR_REGEX
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tag {
@@ -10,9 +19,10 @@ pub struct Tag {
     pub description: Option<String>,
     pub color: String,
     pub space_id: Option<Thing>,
+    pub usage_count: i64,
     pub created_by: String,
     pub created_at: Datetime,
-    pub usage_count: i64,
+    pub updated_at: Datetime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,7 +40,7 @@ pub struct CreateTagRequest {
     pub name: String,
     #[validate(length(max = 200))]
     pub description: Option<String>,
-    #[validate(regex = "^#[0-9A-Fa-f]{6}$")]
+    #[validate(length(min = 4, max = 7))]
     pub color: String,
     pub space_id: Option<String>,
 }
@@ -41,7 +51,7 @@ pub struct UpdateTagRequest {
     pub name: Option<String>,
     #[validate(length(max = 200))]
     pub description: Option<String>,
-    #[validate(regex = "^#[0-9A-Fa-f]{6}$")]
+    #[validate(length(min = 4, max = 7))]
     pub color: Option<String>,
 }
 
@@ -61,9 +71,10 @@ impl Tag {
             description: None,
             color,
             space_id: None,
+            usage_count: 0,
             created_by,
             created_at: Datetime::default(),
-            usage_count: 0,
+            updated_at: Datetime::default(),
         }
     }
 
@@ -72,8 +83,8 @@ impl Tag {
         self
     }
 
-    pub fn with_space(mut self, space_id: Thing) -> Self {
-        self.space_id = Some(space_id);
+    pub fn with_space(mut self, space_id: Option<Thing>) -> Self {
+        self.space_id = space_id;
         self
     }
 

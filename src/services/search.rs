@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use surrealdb::{sql::Thing, Surreal, engine::remote::ws::Client};
+use surrealdb::sql::Thing;
 use std::time::Instant;
 
 use crate::{
@@ -8,26 +8,26 @@ use crate::{
         SearchIndex, SearchRequest, SearchResult, SearchResponse, 
         SearchSortBy, SearchHighlight
     },
-    services::auth::AuthService,
+    services::{auth::AuthService, database::Database},
 };
 
 #[derive(Clone)]
 pub struct SearchService {
-    db: Arc<Surreal<Client>>,
+    db: Arc<Database>,
     auth_service: Arc<AuthService>,
 }
 
 impl SearchService {
-    pub fn new(db: Arc<Surreal<Client>>, auth_service: Arc<AuthService>) -> Self {
+    pub fn new(db: Arc<Database>, auth_service: Arc<AuthService>) -> Self {
         Self { db, auth_service }
     }
 
     pub async fn create_or_update_index(&self, index: SearchIndex) -> Result<(), ApiError> {
-        let _: Option<SearchIndex> = self.db
+        let _: Option<SearchIndex> = self.db.client
             .upsert(("search_index", index.document_id.to_string()))
             .content(index)
             .await
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            .map_err(|e| ApiError::Database(e))?;
 
         Ok(())
     }
@@ -36,7 +36,7 @@ impl SearchService {
         let _: Option<SearchIndex> = self.db
             .delete(("search_index", document_id))
             .await
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            .map_err(|e| ApiError::Database(e))?;
 
         Ok(())
     }
@@ -113,9 +113,9 @@ impl SearchService {
 
         let search_indexes: Vec<SearchIndex> = db_query
             .await
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+            .map_err(|e| ApiError::Database(e))?
             .take(0)
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            .map_err(|e| ApiError::Database(e))?;
 
         // 获取总数
         let total_count = self.get_search_count(user_id, &request).await?;
@@ -199,9 +199,9 @@ impl SearchService {
 
         let result: Vec<surrealdb::sql::Value> = db_query
             .await
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+            .map_err(|e| ApiError::Database(e))?
             .take(0)
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            .map_err(|e| ApiError::Database(e))?;
 
         let count = result
             .first()
@@ -300,9 +300,9 @@ impl SearchService {
             .bind(("prefix", prefix))
             .bind(("limit", limit))
             .await
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+            .map_err(|e| ApiError::Database(e))?
             .take(0)
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            .map_err(|e| ApiError::Database(e))?;
 
         let mut suggestions = Vec::new();
         
@@ -361,9 +361,9 @@ impl SearchService {
         let documents: Vec<surrealdb::sql::Value> = self.db
             .query(query)
             .await
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+            .map_err(|e| ApiError::Database(e))?
             .take(0)
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            .map_err(|e| ApiError::Database(e))?;
 
         let mut indexed_count = 0;
 

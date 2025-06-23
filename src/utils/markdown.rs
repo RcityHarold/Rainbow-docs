@@ -39,20 +39,20 @@ impl MarkdownProcessor {
 
         // 处理代码块语法高亮
         let parser = parser.map(|event| {
-            match event {
+            match &event {
                 pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(kind)) => {
                     match kind {
                         pulldown_cmark::CodeBlockKind::Fenced(lang) => {
                             pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(
-                                pulldown_cmark::CodeBlockKind::Fenced(lang)
+                                pulldown_cmark::CodeBlockKind::Fenced(lang.clone())
                             ))
                         }
                         _ => event,
                     }
                 }
-                pulldown_cmark::Event::Text(text) => {
+                pulldown_cmark::Event::Text(_) => {
                     // 这里可以添加自定义文本处理逻辑
-                    pulldown_cmark::Event::Text(text)
+                    event
                 }
                 _ => event,
             }

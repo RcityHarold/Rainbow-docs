@@ -1,21 +1,21 @@
 use std::sync::Arc;
-use surrealdb::{sql::Thing, Surreal, engine::remote::ws::Client};
+use surrealdb::sql::Thing;
 use validator::Validate;
 
 use crate::{
     error::ApiError,
     models::version::{DocumentVersion, CreateVersionRequest, VersionChangeType},
-    services::auth::AuthService,
+    services::{auth::AuthService, database::Database},
 };
 
 #[derive(Clone)]
 pub struct VersionService {
-    db: Arc<Surreal<Client>>,
+    db: Arc<Database>,
     auth_service: Arc<AuthService>,
 }
 
 impl VersionService {
-    pub fn new(db: Arc<Surreal<Client>>, auth_service: Arc<AuthService>) -> Self {
+    pub fn new(db: Arc<Database>, auth_service: Arc<AuthService>) -> Self {
         Self { db, auth_service }
     }
 

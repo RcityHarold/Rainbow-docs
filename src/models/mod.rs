@@ -5,3 +5,4 @@ pub mod version;
 pub mod permission;
 pub mod tag;
 pub mod search;
+pub mod file;

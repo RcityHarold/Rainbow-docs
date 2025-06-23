@@ -66,7 +66,7 @@ pub struct CreateDocumentRequest {
     pub title: String,
     
     #[validate(length(min = 1, max = 100, message = "Slug must be between 1 and 100 characters"))]
-    #[validate(regex(path = "SLUG_REGEX", message = "Slug can only contain lowercase letters, numbers, and hyphens"))]
+    #[validate(regex(path = "crate::models::document::SLUG_REGEX", message = "Slug can only contain lowercase letters, numbers, and hyphens"))]
     pub slug: String,
     
     pub content: Option<String>,

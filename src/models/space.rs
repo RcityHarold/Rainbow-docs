@@ -75,7 +75,7 @@ pub struct CreateSpaceRequest {
     pub name: String,
     
     #[validate(length(min = 1, max = 50, message = "Slug must be between 1 and 50 characters"))]
-    #[validate(regex(path = "SLUG_REGEX", message = "Slug can only contain lowercase letters, numbers, and hyphens"))]
+    #[validate(regex(path = "crate::models::space::SLUG_REGEX", message = "Slug can only contain lowercase letters, numbers, and hyphens"))]
     pub slug: String,
     
     #[validate(length(max = 500, message = "Description cannot exceed 500 characters"))]

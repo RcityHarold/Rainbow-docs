@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tracing::{info, warn};
 
-pub fn router() -> Router {
+pub fn router() -> Router<Arc<crate::AppState>> {
     Router::new()
         .route("/:space_slug", get(list_documents).post(create_document))
         .route("/:space_slug/:doc_slug", get(get_document).put(update_document).delete(delete_document))

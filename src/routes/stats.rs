@@ -131,7 +131,7 @@ pub async fn get_document_stats(
     Ok(Json(stats))
 }
 
-pub fn router() -> Router {
+pub fn router() -> Router<Arc<crate::AppState>> {
     Router::new()
         .route("/search", get(get_search_stats))
         .route("/documents", get(get_document_stats))
