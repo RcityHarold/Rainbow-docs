@@ -150,7 +150,7 @@ impl FileUploadService {
             }
         }
 
-        let created_file: Option<FileUpload> = self.db.get()
+        let created_files: Vec<FileUpload> = self.db.client
             .create("file_upload")
             .content(file_upload)
             .await
@@ -158,6 +158,8 @@ impl FileUploadService {
                 error!("Failed to save file to database: {}", e);
                 ApiError::internal_server_error("Failed to save file metadata".to_string())
             })?;
+
+        let created_file = created_files.into_iter().next();
 
         let created_file = created_file.ok_or_else(|| {
             ApiError::internal_server_error("Failed to create file record".to_string())
@@ -171,7 +173,7 @@ impl FileUploadService {
         let file_thing = file_id.parse::<Thing>()
             .map_err(|_| ApiError::bad_request("Invalid file ID".to_string()))?;
 
-        let file: Option<FileUpload> = self.db.get()
+        let file: Option<FileUpload> = self.db.client
             .select(("file_upload", file_thing.id))
             .await
             .map_err(|e| {
@@ -198,35 +200,37 @@ impl FileUploadService {
         let offset = (page - 1) * per_page;
 
         let mut sql = "SELECT * FROM file_upload WHERE is_deleted = false".to_string();
-        let mut params = Vec::new();
+        let mut params: Vec<(&str, serde_json::Value)> = Vec::new();
 
         // 添加筛选条件
         if let Some(space_id) = &query.space_id {
             if let Ok(space_thing) = space_id.parse::<Thing>() {
                 sql.push_str(" AND space_id = $space_id");
-                params.push(("space_id", space_thing.into()));
+                params.push(("space_id", serde_json::Value::String(space_thing.to_string())));
             }
         }
 
         if let Some(document_id) = &query.document_id {
             if let Ok(doc_thing) = document_id.parse::<Thing>() {
                 sql.push_str(" AND document_id = $document_id");
-                params.push(("document_id", doc_thing.into()));
+                params.push(("document_id", serde_json::Value::String(doc_thing.to_string())));
             }
         }
 
         if let Some(file_type) = &query.file_type {
             sql.push_str(" AND file_type = $file_type");
-            params.push(("file_type", file_type.clone().into()));
+            params.push(("file_type", serde_json::Value::String(file_type.clone())));
         }
 
         sql.push_str(" ORDER BY created_at DESC");
 
         // 获取总数
         let count_sql = sql.replace("SELECT *", "SELECT count()");
-        let total_count: Option<i64> = self.db.get()
-            .query(count_sql)
-            .bind_all(params.clone())
+        let mut query = self.db.client.query(count_sql);
+        for (key, value) in &params {
+            query = query.bind((key, value));
+        }
+        let total_count: Option<i64> = query
             .await
             .map_err(|e| {
                 error!("Failed to count files: {}", e);
@@ -239,9 +243,11 @@ impl FileUploadService {
         // 添加分页
         sql.push_str(&format!(" LIMIT {} START {}", per_page, offset));
 
-        let files: Vec<FileUpload> = self.db.get()
-            .query(sql)
-            .bind_all(params)
+        let mut files_query = self.db.client.query(sql);
+        for (key, value) in params {
+            files_query = files_query.bind((key, &value));
+        }
+        let files: Vec<FileUpload> = files_query
             .await
             .map_err(|e| {
                 error!("Failed to list files: {}", e);
@@ -277,7 +283,7 @@ impl FileUploadService {
         file.mark_deleted(user_id.to_string());
 
         // 更新数据库
-        let _: Option<FileUpload> = self.db.get()
+        let _: Option<FileUpload> = self.db.client
             .update(("file_upload", file_thing.id))
             .content(file)
             .await

@@ -34,10 +34,11 @@ pub struct CommentListResponse {
 pub async fn get_document_comments(
     Path(document_id): Path<String>,
     Query(query): Query<CommentQuery>,
-    State(comment_service): State<Arc<CommentService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<CommentListResponse>, ApiError> {
+    let comment_service = &app_state.comment_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.comment.read", Some(&document_id))
         .await?;
@@ -66,11 +67,12 @@ pub async fn get_document_comments(
 
 pub async fn create_comment(
     Path(document_id): Path<String>,
-    State(comment_service): State<Arc<CommentService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
     Json(request): Json<CreateCommentRequest>,
 ) -> Result<Json<Comment>, ApiError> {
+    let comment_service = &app_state.comment_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.comment.create", Some(&document_id))
         .await?;
@@ -84,10 +86,11 @@ pub async fn create_comment(
 
 pub async fn get_comment(
     Path(comment_id): Path<String>,
-    State(comment_service): State<Arc<CommentService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<Comment>, ApiError> {
+    let comment_service = &app_state.comment_service;
+    let auth_service = &app_state.auth_service;
     let comment = comment_service.get_comment(&comment_id).await?;
     
     auth_service
@@ -99,11 +102,12 @@ pub async fn get_comment(
 
 pub async fn update_comment(
     Path(comment_id): Path<String>,
-    State(comment_service): State<Arc<CommentService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
     Json(request): Json<UpdateCommentRequest>,
 ) -> Result<Json<Comment>, ApiError> {
+    let comment_service = &app_state.comment_service;
+    let auth_service = &app_state.auth_service;
     let comment = comment_service.get_comment(&comment_id).await?;
     
     if comment.author_id != user_id {
@@ -121,10 +125,11 @@ pub async fn update_comment(
 
 pub async fn delete_comment(
     Path(comment_id): Path<String>,
-    State(comment_service): State<Arc<CommentService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<StatusCode, ApiError> {
+    let comment_service = &app_state.comment_service;
+    let auth_service = &app_state.auth_service;
     let comment = comment_service.get_comment(&comment_id).await?;
     
     if comment.author_id != user_id {
@@ -141,10 +146,11 @@ pub async fn delete_comment(
 pub async fn get_comment_replies(
     Path(comment_id): Path<String>,
     Query(query): Query<CommentQuery>,
-    State(comment_service): State<Arc<CommentService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<CommentListResponse>, ApiError> {
+    let comment_service = &app_state.comment_service;
+    let auth_service = &app_state.auth_service;
     let comment = comment_service.get_comment(&comment_id).await?;
     
     auth_service
@@ -175,10 +181,11 @@ pub async fn get_comment_replies(
 
 pub async fn toggle_comment_like(
     Path(comment_id): Path<String>,
-    State(comment_service): State<Arc<CommentService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<Comment>, ApiError> {
+    let comment_service = &app_state.comment_service;
+    let auth_service = &app_state.auth_service;
     let comment = comment_service.get_comment(&comment_id).await?;
     
     auth_service

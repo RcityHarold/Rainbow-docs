@@ -87,7 +87,7 @@ impl SpaceService {
 
         // 构建查询条件
         let mut where_conditions = Vec::new();
-        let mut params = std::collections::HashMap::new();
+        let mut params: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
 
         // 权限过滤：只显示公开空间或用户拥有的空间
         if let Some(user) = user {

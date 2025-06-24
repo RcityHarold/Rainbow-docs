@@ -123,6 +123,18 @@ pub struct SpaceStats {
     pub last_activity: Option<DateTime<Utc>>,
 }
 
+impl Default for SpaceStats {
+    fn default() -> Self {
+        Self {
+            document_count: 0,
+            public_document_count: 0,
+            comment_count: 0,
+            view_count: 0,
+            last_activity: None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SpaceListResponse {
     pub spaces: Vec<SpaceResponse>,

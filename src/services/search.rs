@@ -24,7 +24,7 @@ impl SearchService {
 
     pub async fn create_or_update_index(&self, index: SearchIndex) -> Result<(), ApiError> {
         let _: Option<SearchIndex> = self.db.client
-            .upsert(("search_index", index.document_id.to_string()))
+            .create(("search_index", index.document_id.to_string()))
             .content(index)
             .await
             .map_err(|e| ApiError::Database(e))?;
@@ -33,7 +33,7 @@ impl SearchService {
     }
 
     pub async fn delete_index(&self, document_id: &str) -> Result<(), ApiError> {
-        let _: Option<SearchIndex> = self.db
+        let _: Option<SearchIndex> = self.db.client
             .delete(("search_index", document_id))
             .await
             .map_err(|e| ApiError::Database(e))?;
@@ -58,22 +58,22 @@ impl SearchService {
             "WHERE is_public = true OR author_id = $user_id".to_string(),
         ];
 
-        let mut bindings = vec![("user_id", user_id)];
+        let mut bindings: Vec<(String, String)> = vec![("user_id".to_string(), user_id.to_string())];
 
         // 添加查询条件
         if !request.query.is_empty() {
             query_parts.push("AND (title CONTAINSTEXT $query OR content CONTAINSTEXT $query)".to_string());
-            bindings.push(("query", &request.query));
+            bindings.push(("query".to_string(), request.query.clone()));
         }
 
         if let Some(space_id) = &request.space_id {
             query_parts.push("AND space_id = $space_id".to_string());
-            bindings.push(("space_id", space_id));
+            bindings.push(("space_id".to_string(), space_id.clone()));
         }
 
         if let Some(author_id) = &request.author_id {
             query_parts.push("AND author_id = $author_id".to_string());
-            bindings.push(("author_id", author_id));
+            bindings.push(("author_id".to_string(), author_id.clone()));
         }
 
         if let Some(tags) = &request.tags {
@@ -86,13 +86,13 @@ impl SearchService {
                 query_parts.push(format!("AND ({})", tags_condition));
                 
                 for (i, tag) in tags.iter().enumerate() {
-                    bindings.push((&format!("tag_{}", i), tag));
+                    bindings.push((format!("tag_{}", i), tag.clone()));
                 }
             }
         }
 
-        // 排序
-        let sort_clause = match request.sort_by.unwrap_or(SearchSortBy::Relevance) {
+        // 排序  
+        let sort_clause = match request.sort_by.as_ref().unwrap_or(&SearchSortBy::Relevance) {
             SearchSortBy::Relevance => "ORDER BY (title CONTAINSTEXT $query) DESC, last_updated DESC",
             SearchSortBy::CreatedAt => "ORDER BY id DESC",
             SearchSortBy::UpdatedAt => "ORDER BY last_updated DESC",
@@ -106,7 +106,7 @@ impl SearchService {
         let full_query = query_parts.join(" ");
 
         // 执行搜索查询
-        let mut db_query = self.db.query(&full_query);
+        let mut db_query = self.db.client.query(&full_query);
         for (key, value) in bindings {
             db_query = db_query.bind((key, value));
         }
@@ -157,21 +157,21 @@ impl SearchService {
             "WHERE is_public = true OR author_id = $user_id".to_string(),
         ];
 
-        let mut bindings = vec![("user_id", user_id)];
+        let mut bindings: Vec<(String, String)> = vec![("user_id".to_string(), user_id.to_string())];
 
         if !request.query.is_empty() {
             query_parts.push("AND (title CONTAINSTEXT $query OR content CONTAINSTEXT $query)".to_string());
-            bindings.push(("query", &request.query));
+            bindings.push(("query".to_string(), request.query.clone()));
         }
 
         if let Some(space_id) = &request.space_id {
             query_parts.push("AND space_id = $space_id".to_string());
-            bindings.push(("space_id", space_id));
+            bindings.push(("space_id".to_string(), space_id.clone()));
         }
 
         if let Some(author_id) = &request.author_id {
             query_parts.push("AND author_id = $author_id".to_string());
-            bindings.push(("author_id", author_id));
+            bindings.push(("author_id".to_string(), author_id.clone()));
         }
 
         if let Some(tags) = &request.tags {
@@ -184,7 +184,7 @@ impl SearchService {
                 query_parts.push(format!("AND ({})", tags_condition));
                 
                 for (i, tag) in tags.iter().enumerate() {
-                    bindings.push((&format!("tag_{}", i), tag));
+                    bindings.push((format!("tag_{}", i), tag.clone()));
                 }
             }
         }
@@ -192,7 +192,7 @@ impl SearchService {
         query_parts.push("GROUP ALL".to_string());
         let full_query = query_parts.join(" ");
 
-        let mut db_query = self.db.query(&full_query);
+        let mut db_query = self.db.client.query(&full_query);
         for (key, value) in bindings {
             db_query = db_query.bind((key, value));
         }
@@ -205,7 +205,7 @@ impl SearchService {
 
         let count = result
             .first()
-            .and_then(|v| v.as_int())
+            .and_then(|v| v.to_string().parse::<i64>().ok())
             .unwrap_or(0);
 
         Ok(count)
@@ -294,7 +294,7 @@ impl SearchService {
             LIMIT $limit
         ";
 
-        let results: Vec<SearchIndex> = self.db
+        let results: Vec<SearchIndex> = self.db.client
             .query(query)
             .bind(("user_id", user_id))
             .bind(("prefix", prefix))
@@ -358,7 +358,7 @@ impl SearchService {
             WHERE is_deleted = false
         ";
 
-        let documents: Vec<surrealdb::sql::Value> = self.db
+        let documents: Vec<surrealdb::sql::Value> = self.db.client
             .query(query)
             .await
             .map_err(|e| ApiError::Database(e))?
@@ -368,7 +368,7 @@ impl SearchService {
         let mut indexed_count = 0;
 
         for doc in documents {
-            if let Ok(doc_obj) = doc.try_into::<surrealdb::sql::Object>() {
+            if let Ok(doc_obj) = surrealdb::sql::Object::try_from(doc) {
                 // 提取文档信息并创建索引
                 // 这里需要根据实际的文档结构来解析
                 indexed_count += 1;

@@ -55,10 +55,11 @@ pub struct TagDocumentsResponse {
 
 pub async fn get_tags(
     Query(query): Query<TagQuery>,
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<TagListResponse>, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     // 检查读取权限
     if let Some(space_id) = &query.space_id {
         auth_service
@@ -97,11 +98,12 @@ pub async fn get_tags(
 }
 
 pub async fn create_tag(
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
     Json(request): Json<CreateTagRequest>,
 ) -> Result<Json<Tag>, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     // 检查创建权限
     if let Some(space_id) = &request.space_id {
         auth_service
@@ -119,10 +121,11 @@ pub async fn create_tag(
 
 pub async fn get_tag(
     Path(tag_id): Path<String>,
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<Tag>, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     let tag = tag_service.get_tag(&tag_id).await?;
     
     // 检查读取权限
@@ -141,11 +144,12 @@ pub async fn get_tag(
 
 pub async fn update_tag(
     Path(tag_id): Path<String>,
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
     Json(request): Json<UpdateTagRequest>,
 ) -> Result<Json<Tag>, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     let tag = tag_service.get_tag(&tag_id).await?;
     
     // 检查更新权限
@@ -165,10 +169,11 @@ pub async fn update_tag(
 
 pub async fn delete_tag(
     Path(tag_id): Path<String>,
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<StatusCode, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     let tag = tag_service.get_tag(&tag_id).await?;
     
     // 检查删除权限
@@ -188,10 +193,11 @@ pub async fn delete_tag(
 
 pub async fn get_popular_tags(
     Query(query): Query<PopularTagsQuery>,
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<Vec<Tag>>, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     // 检查读取权限
     if let Some(space_id) = &query.space_id {
         auth_service
@@ -212,11 +218,12 @@ pub async fn get_popular_tags(
 }
 
 pub async fn tag_document(
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
     Json(request): Json<TagDocumentRequest>,
 ) -> Result<Json<Vec<DocumentTag>>, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     // 检查文档标签权限
     auth_service
         .check_permission(&user_id, "docs.tag.manage", Some(&request.document_id))
@@ -228,10 +235,11 @@ pub async fn tag_document(
 
 pub async fn untag_document(
     Path((document_id, tag_id)): Path<(String, String)>,
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<StatusCode, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     // 检查文档标签权限
     auth_service
         .check_permission(&user_id, "docs.tag.manage", Some(&document_id))
@@ -243,10 +251,11 @@ pub async fn untag_document(
 
 pub async fn get_document_tags(
     Path(document_id): Path<String>,
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<DocumentTagsResponse>, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     // 检查文档读取权限
     auth_service
         .check_permission(&user_id, "docs.read", Some(&document_id))
@@ -263,10 +272,11 @@ pub async fn get_document_tags(
 pub async fn get_documents_by_tag(
     Path(tag_id): Path<String>,
     Query(query): Query<TagQuery>,
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<TagDocumentsResponse>, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     let tag = tag_service.get_tag(&tag_id).await?;
     
     // 检查标签读取权限
@@ -301,10 +311,11 @@ pub async fn get_documents_by_tag(
 
 pub async fn get_tag_statistics(
     Query(query): Query<TagQuery>,
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<TagStatistics>, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     // 检查统计查看权限
     if let Some(space_id) = &query.space_id {
         auth_service
@@ -325,10 +336,11 @@ pub async fn get_tag_statistics(
 
 pub async fn suggest_tags(
     Query(query): Query<TagQuery>,
-    State(tag_service): State<Arc<TagService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<Vec<Tag>>, ApiError> {
+    let tag_service = &app_state.tag_service;
+    let auth_service = &app_state.auth_service;
     // 检查读取权限
     if let Some(space_id) = &query.space_id {
         auth_service

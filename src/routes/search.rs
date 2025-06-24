@@ -45,10 +45,11 @@ pub struct ReindexResponse {
 
 pub async fn search_documents(
     Query(query): Query<SearchQuery>,
-    State(search_service): State<Arc<SearchService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<SearchResponse>, ApiError> {
+    let search_service = &app_state.search_service;
+    let auth_service = &app_state.auth_service;
     // 检查基本搜索权限
     auth_service
         .check_permission(&user_id, "docs.read", None)
@@ -85,10 +86,11 @@ pub async fn search_documents(
 
 pub async fn search_suggestions(
     Query(query): Query<SuggestQuery>,
-    State(search_service): State<Arc<SearchService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<SuggestResponse>, ApiError> {
+    let search_service = &app_state.search_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.read", None)
         .await?;
@@ -105,10 +107,11 @@ pub async fn search_suggestions(
 }
 
 pub async fn reindex_documents(
-    State(search_service): State<Arc<SearchService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<ReindexResponse>, ApiError> {
+    let search_service = &app_state.search_service;
+    let auth_service = &app_state.auth_service;
     // 只有文档管理员可以重建索引
     auth_service
         .check_permission(&user_id, "docs.admin", None)
@@ -125,10 +128,11 @@ pub async fn reindex_documents(
 pub async fn search_within_space(
     axum::extract::Path(space_id): axum::extract::Path<String>,
     Query(mut query): Query<SearchQuery>,
-    State(search_service): State<Arc<SearchService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<SearchResponse>, ApiError> {
+    let search_service = &app_state.search_service;
+    let auth_service = &app_state.auth_service;
     // 检查空间访问权限  
     auth_service
         .check_permission(&user_id, "docs.read", Some(&space_id))
@@ -166,10 +170,11 @@ pub async fn search_within_space(
 
 pub async fn search_by_tags(
     Query(query): Query<SearchQuery>,
-    State(search_service): State<Arc<SearchService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<SearchResponse>, ApiError> {
+    let search_service = &app_state.search_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.read", None)
         .await?;

@@ -45,7 +45,7 @@ impl VersionService {
         .with_summary(request.summary.unwrap_or_default())
         .set_as_current();
 
-        let created: Vec<DocumentVersion> = self.db
+        let created: Vec<DocumentVersion> = self.db.client
             .create("document_version")
             .content(version)
             .await
@@ -58,7 +58,7 @@ impl VersionService {
     }
 
     pub async fn get_version(&self, version_id: &str) -> Result<DocumentVersion, ApiError> {
-        let version: Option<DocumentVersion> = self.db
+        let version: Option<DocumentVersion> = self.db.client
             .select(("document_version", version_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
@@ -81,7 +81,7 @@ impl VersionService {
             LIMIT $limit START $offset
         ";
 
-        let versions: Vec<DocumentVersion> = self.db
+        let versions: Vec<DocumentVersion> = self.db.client
             .query(query)
             .bind(("document_id", Thing::from(("document", document_id))))
             .bind(("limit", per_page))
@@ -102,7 +102,7 @@ impl VersionService {
             LIMIT 1
         ";
 
-        let versions: Vec<DocumentVersion> = self.db
+        let versions: Vec<DocumentVersion> = self.db.client
             .query(query)
             .bind(("document_id", Thing::from(("document", document_id))))
             .await
@@ -181,7 +181,7 @@ impl VersionService {
             GROUP ALL
         ";
 
-        let result: Vec<surrealdb::sql::Value> = self.db
+        let result: Vec<surrealdb::sql::Value> = self.db.client
             .query(query)
             .bind(("document_id", Thing::from(("document", document_id))))
             .await
@@ -220,7 +220,7 @@ impl VersionService {
             return Err(ApiError::BadRequest("Cannot delete current version".to_string()));
         }
 
-        let _: Option<DocumentVersion> = self.db
+        let _: Option<DocumentVersion> = self.db.client
             .delete(("document_version", version_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
@@ -240,7 +240,7 @@ impl VersionService {
             ORDER BY version_number DESC
         ";
 
-        let versions: Vec<DocumentVersion> = self.db
+        let versions: Vec<DocumentVersion> = self.db.client
             .query(query)
             .bind(("document_id", Thing::from(("document", document_id))))
             .bind(("author_id", author_id))
@@ -260,7 +260,7 @@ impl VersionService {
             GROUP ALL
         ";
 
-        let result: Vec<surrealdb::sql::Value> = self.db
+        let result: Vec<surrealdb::sql::Value> = self.db.client
             .query(query)
             .bind(("document_id", Thing::from(("document", document_id))))
             .await
@@ -270,7 +270,7 @@ impl VersionService {
 
         let max_version = result
             .first()
-            .and_then(|v| v.as_int())
+            .and_then(|v| v.to_string().parse::<i64>().ok())
             .unwrap_or(0);
 
         Ok(max_version as i32)
@@ -284,7 +284,7 @@ impl VersionService {
             AND is_current = true
         ";
 
-        let _: Vec<surrealdb::sql::Value> = self.db
+        let _: Vec<surrealdb::sql::Value> = self.db.client
             .query(query)
             .bind(("document_id", Thing::from(("document", document_id))))
             .await

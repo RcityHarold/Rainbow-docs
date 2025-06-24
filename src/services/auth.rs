@@ -291,7 +291,7 @@ impl AuthService {
         let mut results = HashMap::new();
         
         for permission in permissions {
-            let has_permission = self.check_permission(user_id, permission, token).await?;
+            let has_permission = self.check_permission(user_id, permission, None).await?;
             results.insert(permission.to_string(), has_permission);
         }
         

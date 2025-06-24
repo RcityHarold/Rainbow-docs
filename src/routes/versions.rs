@@ -48,10 +48,11 @@ pub struct CompareVersionsQuery {
 pub async fn get_document_versions(
     Path(document_id): Path<String>,
     Query(query): Query<VersionQuery>,
-    State(version_service): State<Arc<VersionService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<VersionListResponse>, ApiError> {
+    let version_service = &app_state.version_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.read", Some(&document_id))
         .await?;
@@ -84,11 +85,12 @@ pub async fn get_document_versions(
 
 pub async fn create_document_version(
     Path(document_id): Path<String>,
-    State(version_service): State<Arc<VersionService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
     Json(request): Json<CreateVersionRequest>,
 ) -> Result<Json<DocumentVersion>, ApiError> {
+    let version_service = &app_state.version_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.update", Some(&document_id))
         .await?;
@@ -102,10 +104,11 @@ pub async fn create_document_version(
 
 pub async fn get_version(
     Path((document_id, version_id)): Path<(String, String)>,
-    State(version_service): State<Arc<VersionService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<DocumentVersion>, ApiError> {
+    let version_service = &app_state.version_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.read", Some(&document_id))
         .await?;
@@ -122,10 +125,11 @@ pub async fn get_version(
 
 pub async fn get_current_version(
     Path(document_id): Path<String>,
-    State(version_service): State<Arc<VersionService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<Option<DocumentVersion>>, ApiError> {
+    let version_service = &app_state.version_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.read", Some(&document_id))
         .await?;
@@ -139,11 +143,12 @@ pub async fn get_current_version(
 
 pub async fn restore_version(
     Path((document_id, version_id)): Path<(String, String)>,
-    State(version_service): State<Arc<VersionService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
     Json(_request): Json<RestoreVersionRequest>,
 ) -> Result<Json<DocumentVersion>, ApiError> {
+    let version_service = &app_state.version_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.update", Some(&document_id))
         .await?;
@@ -158,10 +163,11 @@ pub async fn restore_version(
 pub async fn compare_versions(
     Path(document_id): Path<String>,
     Query(query): Query<CompareVersionsQuery>,
-    State(version_service): State<Arc<VersionService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<VersionComparison>, ApiError> {
+    let version_service = &app_state.version_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.read", Some(&document_id))
         .await?;
@@ -175,10 +181,11 @@ pub async fn compare_versions(
 
 pub async fn get_version_history_summary(
     Path(document_id): Path<String>,
-    State(version_service): State<Arc<VersionService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<VersionHistorySummary>, ApiError> {
+    let version_service = &app_state.version_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.read", Some(&document_id))
         .await?;
@@ -192,10 +199,11 @@ pub async fn get_version_history_summary(
 
 pub async fn delete_version(
     Path((document_id, version_id)): Path<(String, String)>,
-    State(version_service): State<Arc<VersionService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<StatusCode, ApiError> {
+    let version_service = &app_state.version_service;
+    let auth_service = &app_state.auth_service;
     // 只有文档管理员或版本作者可以删除版本
     auth_service
         .check_permission(&user_id, "docs.admin", Some(&document_id))
@@ -209,10 +217,11 @@ pub async fn delete_version(
 pub async fn get_version_diff(
     Path((document_id, version_id)): Path<(String, String)>,
     Query(query): Query<CompareVersionsQuery>,
-    State(version_service): State<Arc<VersionService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<VersionComparison>, ApiError> {
+    let version_service = &app_state.version_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.read", Some(&document_id))
         .await?;
@@ -228,10 +237,11 @@ pub async fn get_version_diff(
 pub async fn get_versions_by_date_range(
     Path(document_id): Path<String>,
     Query(query): Query<DateRangeQuery>,
-    State(version_service): State<Arc<VersionService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<Vec<DocumentVersion>>, ApiError> {
+    let version_service = &app_state.version_service;
+    let auth_service = &app_state.auth_service;
     auth_service
         .check_permission(&user_id, "docs.read", Some(&document_id))
         .await?;

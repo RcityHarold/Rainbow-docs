@@ -83,7 +83,7 @@ pub fn has_document_permission(
 pub async fn extract_user_from_header(
     headers: &HeaderMap,
     auth_service: &Arc<AuthService>,
-) -> Result<String, AppError> {
+) -> crate::error::Result<String> {
     let auth_header = headers
         .get("Authorization")
         .and_then(|header| header.to_str().ok())
@@ -96,10 +96,13 @@ pub async fn extract_user_from_header(
     let token = &auth_header[7..]; // Remove "Bearer " prefix
     
     // Validate token and extract user ID
-    let user = auth_service.validate_token(token).await
+    let claims = auth_service.verify_jwt(token)
         .map_err(|_| AppError::unauthorized("Invalid token"))?;
     
-    Ok(user.id)
+    // Extract user ID from claims
+    let user_id = claims.sub;
+    
+    Ok(user_id)
 }
 
 #[cfg(test)]

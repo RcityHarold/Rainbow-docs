@@ -5,17 +5,17 @@ use validator::Validate;
 use crate::{
     error::ApiError,
     models::comment::{Comment, CreateCommentRequest, UpdateCommentRequest},
-    services::auth::AuthService,
+    services::{auth::AuthService, database::Database},
 };
 
 #[derive(Clone)]
 pub struct CommentService {
-    db: Arc<Surreal<Client>>,
+    db: Arc<Database>,
     auth_service: Arc<AuthService>,
 }
 
 impl CommentService {
-    pub fn new(db: Arc<Surreal<Client>>, auth_service: Arc<AuthService>) -> Self {
+    pub fn new(db: Arc<Database>, auth_service: Arc<AuthService>) -> Self {
         Self { db, auth_service }
     }
 
@@ -35,16 +35,16 @@ impl CommentService {
         };
 
         let mut comment = Comment::new(
-            document_thing,
-            request.content,
+            document_thing.to_string(),
             author_id.to_string(),
+            request.content,
         );
 
         if let Some(parent_id) = parent_id {
-            comment = comment.with_parent(parent_id);
+            comment = comment.with_parent(parent_id.to_string());
         }
 
-        let created: Vec<Comment> = self.db
+        let created: Vec<Comment> = self.db.client
             .create("comment")
             .content(comment)
             .await
@@ -57,7 +57,7 @@ impl CommentService {
     }
 
     pub async fn get_comment(&self, comment_id: &str) -> Result<Comment, ApiError> {
-        let comment: Option<Comment> = self.db
+        let comment: Option<Comment> = self.db.client
             .select(("comment", comment_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
@@ -79,7 +79,7 @@ impl CommentService {
             comment.update_content(content, editor_id.to_string());
         }
 
-        let updated: Option<Comment> = self.db
+        let updated: Option<Comment> = self.db.client
             .update(("comment", comment_id))
             .content(comment)
             .await
@@ -92,7 +92,7 @@ impl CommentService {
         let mut comment = self.get_comment(comment_id).await?;
         comment.soft_delete(deleter_id.to_string());
 
-        let _: Option<Comment> = self.db
+        let _: Option<Comment> = self.db.client
             .update(("comment", comment_id))
             .content(comment)
             .await
@@ -118,7 +118,7 @@ impl CommentService {
             LIMIT $limit START $offset
         ";
 
-        let comments: Vec<Comment> = self.db
+        let comments: Vec<Comment> = self.db.client
             .query(query)
             .bind(("document_id", Thing::from(("document", document_id))))
             .bind(("limit", per_page))
@@ -140,7 +140,7 @@ impl CommentService {
             GROUP ALL
         ";
 
-        let result: Vec<surrealdb::sql::Value> = self.db
+        let result: Vec<surrealdb::sql::Value> = self.db.client
             .query(query)
             .bind(("document_id", Thing::from(("document", document_id))))
             .await
@@ -150,7 +150,13 @@ impl CommentService {
 
         let count = result
             .first()
-            .and_then(|v| v.as_int())
+            .and_then(|v| {
+                if let Ok(n) = v.to_string().parse::<i64>() {
+                    Some(n)
+                } else {
+                    None
+                }
+            })
             .unwrap_or(0);
 
         Ok(count)
@@ -172,7 +178,7 @@ impl CommentService {
             LIMIT $limit START $offset
         ";
 
-        let replies: Vec<Comment> = self.db
+        let replies: Vec<Comment> = self.db.client
             .query(query)
             .bind(("parent_id", Thing::from(("comment", parent_id))))
             .bind(("limit", per_page))
@@ -193,7 +199,7 @@ impl CommentService {
             GROUP ALL
         ";
 
-        let result: Vec<surrealdb::sql::Value> = self.db
+        let result: Vec<surrealdb::sql::Value> = self.db.client
             .query(query)
             .bind(("parent_id", Thing::from(("comment", parent_id))))
             .await
@@ -203,7 +209,13 @@ impl CommentService {
 
         let count = result
             .first()
-            .and_then(|v| v.as_int())
+            .and_then(|v| {
+                if let Ok(n) = v.to_string().parse::<i64>() {
+                    Some(n)
+                } else {
+                    None
+                }
+            })
             .unwrap_or(0);
 
         Ok(count)
@@ -222,7 +234,7 @@ impl CommentService {
             comment.like(user_id.to_string());
         }
 
-        let updated: Option<Comment> = self.db
+        let updated: Option<Comment> = self.db.client
             .update(("comment", comment_id))
             .content(comment)
             .await
@@ -239,7 +251,7 @@ impl CommentService {
             ORDER BY created_at ASC
         ";
 
-        let thread: Vec<Comment> = self.db
+        let thread: Vec<Comment> = self.db.client
             .query(query)
             .bind(("comment_id", Thing::from(("comment", comment_id))))
             .await
@@ -268,7 +280,7 @@ impl CommentService {
             LIMIT $limit START $offset
         ";
 
-        let comments: Vec<Comment> = self.db
+        let comments: Vec<Comment> = self.db.client
             .query(search_query)
             .bind(("document_id", Thing::from(("document", document_id))))
             .bind(("query", query))

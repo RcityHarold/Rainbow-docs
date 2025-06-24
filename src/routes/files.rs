@@ -25,11 +25,12 @@ pub fn router() -> Router<Arc<crate::AppState>> {
 }
 
 async fn upload_file(
-    State(service): State<Arc<FileUploadService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     headers: axum::http::HeaderMap,
     multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
+    let service = &app_state.file_upload_service;
+    let auth_service = &app_state.auth_service;
     let user_id = extract_user_from_header(&headers, &auth_service).await?;
     
     // 从 multipart 中提取请求参数
@@ -46,11 +47,12 @@ async fn upload_file(
 }
 
 async fn list_files(
-    State(service): State<Arc<FileUploadService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     headers: axum::http::HeaderMap,
     Query(query): Query<FileQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let service = &app_state.file_upload_service;
+    let auth_service = &app_state.auth_service;
     let user_id = extract_user_from_header(&headers, &auth_service).await?;
     
     let files = service.list_files(&user_id, query).await?;
@@ -58,24 +60,26 @@ async fn list_files(
 }
 
 async fn get_file_info(
-    State(service): State<Arc<FileUploadService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     headers: axum::http::HeaderMap,
     Path(file_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let service = &app_state.file_upload_service;
+    let auth_service = &app_state.auth_service;
     let _user_id = extract_user_from_header(&headers, &auth_service).await?;
     
     let file = service.get_file(&file_id).await?;
-    let file_response = file.into();
+    let file_response: crate::models::file::FileResponse = file.into();
     Ok(Json(file_response))
 }
 
 async fn download_file(
-    State(service): State<Arc<FileUploadService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     headers: axum::http::HeaderMap,
     Path(file_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let service = &app_state.file_upload_service;
+    let auth_service = &app_state.auth_service;
     let _user_id = extract_user_from_header(&headers, &auth_service).await?;
     
     let (content, mime_type, original_name) = service.get_file_content(&file_id).await?;
@@ -92,11 +96,12 @@ async fn download_file(
 }
 
 async fn get_thumbnail(
-    State(service): State<Arc<FileUploadService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     headers: axum::http::HeaderMap,
     Path(file_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let service = &app_state.file_upload_service;
+    let auth_service = &app_state.auth_service;
     let _user_id = extract_user_from_header(&headers, &auth_service).await?;
     
     let thumbnail_content = service.get_thumbnail(&file_id).await?;
@@ -110,11 +115,12 @@ async fn get_thumbnail(
 }
 
 async fn delete_file(
-    State(service): State<Arc<FileUploadService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     headers: axum::http::HeaderMap,
     Path(file_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    let service = &app_state.file_upload_service;
+    let auth_service = &app_state.auth_service;
     let user_id = extract_user_from_header(&headers, &auth_service).await?;
     
     service.delete_file(&user_id, &file_id).await?;

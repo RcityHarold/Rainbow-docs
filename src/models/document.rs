@@ -17,7 +17,13 @@ pub struct Document {
     pub author_id: String,
     pub last_editor_id: Option<String>,
     pub view_count: u32,
+    pub word_count: u32,
+    pub reading_time: u32, // in minutes
     pub metadata: DocumentMetadata,
+    pub updated_by: Option<String>,
+    pub is_deleted: bool,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_by: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
 }
@@ -209,7 +215,13 @@ impl Document {
             author_id,
             last_editor_id: None,
             view_count: 0,
+            word_count: 0,
+            reading_time: 0,
             metadata: DocumentMetadata::default(),
+            updated_by: None,
+            is_deleted: false,
+            deleted_at: None,
+            deleted_by: None,
             created_at: None,
             updated_at: None,
         }
@@ -217,6 +229,22 @@ impl Document {
 
     pub fn is_author(&self, user_id: &str) -> bool {
         self.author_id == user_id
+    }
+
+    pub fn with_parent(mut self, parent_id: String) -> Self {
+        self.parent_id = Some(parent_id);
+        self
+    }
+
+    pub fn with_description(mut self, description: String) -> Self {
+        self.excerpt = Some(description);
+        self
+    }
+
+    pub fn soft_delete(&mut self, deleter_id: String) {
+        self.is_deleted = true;
+        self.deleted_at = Some(Utc::now());
+        self.deleted_by = Some(deleter_id);
     }
 
     pub fn can_read(&self, user_id: Option<&str>, is_space_public: bool) -> bool {

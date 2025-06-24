@@ -12,6 +12,10 @@ pub struct Comment {
     pub content: String,
     pub is_resolved: bool,
     pub metadata: CommentMetadata,
+    pub liked_by: Vec<String>, // 点赞用户列表
+    pub is_deleted: bool,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_by: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
 }
@@ -120,6 +124,10 @@ impl Comment {
             content,
             is_resolved: false,
             metadata: CommentMetadata::default(),
+            liked_by: Vec::new(),
+            is_deleted: false,
+            deleted_at: None,
+            deleted_by: None,
             created_at: None,
             updated_at: None,
         }
@@ -139,6 +147,41 @@ impl Comment {
 
     pub fn can_delete(&self, user_id: &str, is_moderator: bool) -> bool {
         self.is_author(user_id) || is_moderator
+    }
+
+    pub fn with_parent(mut self, parent_id: String) -> Self {
+        self.parent_id = Some(parent_id);
+        self
+    }
+
+    pub fn update_content(&mut self, content: String, editor_id: String) {
+        self.content = content;
+        self.updated_at = Some(Utc::now());
+        // Note: editor_id could be used for audit trail if needed
+    }
+
+    pub fn soft_delete(&mut self, deleter_id: String) {
+        self.is_deleted = true;
+        self.deleted_at = Some(Utc::now());
+        self.deleted_by = Some(deleter_id);
+    }
+
+    pub fn like(&mut self, user_id: String) {
+        if !self.liked_by.contains(&user_id) {
+            self.liked_by.push(user_id);
+        }
+    }
+
+    pub fn unlike(&mut self, user_id: String) {
+        self.liked_by.retain(|id| id != &user_id);
+    }
+
+    pub fn is_liked_by(&self, user_id: &str) -> bool {
+        self.liked_by.contains(&user_id.to_string())
+    }
+
+    pub fn like_count(&self) -> usize {
+        self.liked_by.len()
     }
 }
 

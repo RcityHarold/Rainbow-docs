@@ -40,6 +40,32 @@ pub enum AppError {
     
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Validation error: {0}")]
+    ValidationErrors(#[from] validator::ValidationErrors),
+}
+
+impl AppError {
+    pub fn database_error(msg: impl Into<String>) -> Self {
+        Self::Internal(anyhow::anyhow!(msg.into()))
+    }
+}
+
+// Type alias for backward compatibility (defined below)
+
+// Convenience constructors
+impl AppError {
+    pub fn BadRequest(msg: String) -> Self {
+        Self::Validation(msg)
+    }
+
+    pub fn DatabaseError(msg: String) -> Self {
+        Self::database_error(msg)
+    }
+
+    pub fn InternalServerError(msg: String) -> Self {
+        Self::Internal(anyhow::anyhow!(msg))
+    }
 }
 
 impl IntoResponse for AppError {
@@ -88,6 +114,10 @@ impl IntoResponse for AppError {
             AppError::Io(ref e) => {
                 tracing::error!("IO error: {}", e);
                 (StatusCode::INTERNAL_SERVER_ERROR, "File system error")
+            }
+            AppError::ValidationErrors(ref e) => {
+                tracing::warn!("Validation errors: {}", e);
+                (StatusCode::BAD_REQUEST, "Validation failed")
             }
         };
 

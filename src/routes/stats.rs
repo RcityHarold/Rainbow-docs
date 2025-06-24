@@ -52,10 +52,11 @@ pub struct SpaceActivity {
 }
 
 pub async fn get_search_stats(
-    State(search_service): State<Arc<SearchService>>,
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<SearchStats>, ApiError> {
+    let search_service = &app_state.search_service;
+    let auth_service = &app_state.auth_service;
     // 检查统计查看权限
     auth_service
         .check_permission(&user_id, "docs.read", None)
@@ -98,9 +99,10 @@ pub async fn get_search_stats(
 }
 
 pub async fn get_document_stats(
-    State(auth_service): State<Arc<AuthService>>,
+    State(app_state): State<Arc<crate::AppState>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<DocumentStats>, ApiError> {
+    let auth_service = &app_state.auth_service;
     // 检查统计查看权限
     auth_service
         .check_permission(&user_id, "docs.read", None)

@@ -4,6 +4,23 @@ use syntect::html::{ClassedHTMLGenerator, ClassStyle};
 use syntect::parsing::SyntaxSet;
 use syntect::highlighting::{ThemeSet, Theme};
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProcessedContent {
+    pub html: String,
+    pub word_count: u32,
+    pub reading_time: u32,
+    pub excerpt: String,
+    pub toc: Vec<TocEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TocEntry {
+    pub level: u8,
+    pub title: String,
+    pub id: String,
+}
 
 pub struct MarkdownProcessor {
     syntax_set: SyntaxSet,
@@ -22,6 +39,60 @@ impl MarkdownProcessor {
             theme_set,
             default_theme,
         }
+    }
+
+    /// 完整处理Markdown内容
+    pub async fn process(&self, markdown: &str) -> Result<ProcessedContent> {
+        let html = self.render(markdown)?;
+        let word_count = self.count_words(markdown);
+        let reading_time = self.estimate_reading_time(markdown);
+        let excerpt = self.extract_excerpt(markdown, 200);
+        let toc = self.extract_toc(markdown)?;
+
+        Ok(ProcessedContent {
+            html,
+            word_count,
+            reading_time,
+            excerpt,
+            toc,
+        })
+    }
+
+    /// 统计字数
+    pub fn count_words(&self, markdown: &str) -> u32 {
+        let plain_text = self.strip_markdown(markdown);
+        plain_text.split_whitespace().count() as u32
+    }
+
+    /// 提取目录
+    pub fn extract_toc(&self, markdown: &str) -> Result<Vec<TocEntry>> {
+        let mut toc = Vec::new();
+        let parser = Parser::new(markdown);
+        let mut current_heading = None;
+        let mut heading_counter = 0;
+
+        for event in parser {
+            match event {
+                pulldown_cmark::Event::Start(pulldown_cmark::Tag::Heading(level, _, _)) => {
+                    current_heading = Some((level as u8, String::new()));
+                }
+                pulldown_cmark::Event::Text(text) if current_heading.is_some() => {
+                    if let Some((level, ref mut title)) = current_heading {
+                        title.push_str(&text);
+                    }
+                }
+                pulldown_cmark::Event::End(pulldown_cmark::Tag::Heading(_, _, _)) => {
+                    if let Some((level, title)) = current_heading.take() {
+                        heading_counter += 1;
+                        let id = format!("heading-{}", heading_counter);
+                        toc.push(TocEntry { level, title, id });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(toc)
     }
 
     /// 将Markdown渲染为HTML
