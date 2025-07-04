@@ -68,17 +68,26 @@ async fn get_document(
     Path((space_slug, doc_slug)): Path<(String, String)>,
     OptionalUser(user): OptionalUser,
 ) -> Result<Json<Value>> {
-    // TODO: Implement proper document retrieval
-    let result = serde_json::json!({
-        "id": "mock",
-        "title": "Mock Document",
-        "slug": doc_slug,
-        "content": "Mock content"
-    });
+    let space_service = &app_state.space_service;
+    let document_service = &app_state.document_service;
+    let auth_service = &app_state.auth_service;
+    
+    // 根据slug获取space
+    let space = space_service.get_space_by_slug(&space_slug, user.as_ref()).await?;
+    
+    // 检查读取权限
+    if let Some(user) = &user {
+        auth_service
+            .check_permission(&user.id, "docs.read", Some(&space.id))
+            .await?;
+    }
+    
+    // 根据slug获取document
+    let document = document_service.get_document_by_slug(&space.id, &doc_slug).await?;
 
     Ok(Json(json!({
         "success": true,
-        "data": result,
+        "data": document,
         "message": "Document retrieved successfully"
     })))
 }
@@ -91,14 +100,32 @@ async fn update_document(
     user: User,
     Json(request): Json<UpdateDocumentRequest>,
 ) -> Result<Json<Value>> {
-    // TODO: Implement proper document update
-    let result = serde_json::json!({"updated": true});
+    let space_service = &app_state.space_service;
+    let document_service = &app_state.document_service;
+    let auth_service = &app_state.auth_service;
+    
+    // 根据slug获取space
+    let space = space_service.get_space_by_slug(&space_slug, Some(&user)).await?;
+    
+    // 检查写入权限
+    auth_service
+        .check_permission(&user.id, "docs.write", Some(&space.id))
+        .await?;
+    
+    // 根据slug获取document
+    let document = document_service.get_document_by_slug(&space.id, &doc_slug).await?;
+    
+    // 更新文档
+    let document_id = document.id.as_ref().ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("Document ID is missing"))
+    })?;
+    let updated_document = document_service.update_document(document_id, &user.id, request).await?;
 
     info!("User {} updated document: {} in space: {}", user.id, doc_slug, space_slug);
 
     Ok(Json(json!({
         "success": true,
-        "data": result,
+        "data": updated_document,
         "message": "Document updated successfully"
     })))
 }
@@ -110,8 +137,26 @@ async fn delete_document(
     Path((space_slug, doc_slug)): Path<(String, String)>,
     user: User,
 ) -> Result<Json<Value>> {
-    // TODO: Implement proper document deletion
-    // app_state.document_service.delete_document(&space_slug, &doc_slug, &user).await?;
+    let space_service = &app_state.space_service;
+    let document_service = &app_state.document_service;
+    let auth_service = &app_state.auth_service;
+    
+    // 根据slug获取space
+    let space = space_service.get_space_by_slug(&space_slug, Some(&user)).await?;
+    
+    // 检查删除权限
+    auth_service
+        .check_permission(&user.id, "docs.delete", Some(&space.id))
+        .await?;
+    
+    // 根据slug获取document
+    let document = document_service.get_document_by_slug(&space.id, &doc_slug).await?;
+    
+    // 删除文档
+    let document_id = document.id.as_ref().ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("Document ID is missing"))
+    })?;
+    document_service.delete_document(document_id, &user.id).await?;
 
     info!("User {} deleted document: {} in space: {}", user.id, doc_slug, space_slug);
 
@@ -129,12 +174,26 @@ async fn get_document_tree(
     Path(space_slug): Path<String>,
     OptionalUser(user): OptionalUser,
 ) -> Result<Json<Value>> {
-    // TODO: Implement proper document tree retrieval
-    let result = serde_json::json!({"tree": []});
+    let space_service = &app_state.space_service;
+    let document_service = &app_state.document_service;
+    let auth_service = &app_state.auth_service;
+    
+    // 根据slug获取space
+    let space = space_service.get_space_by_slug(&space_slug, user.as_ref()).await?;
+    
+    // 检查读取权限
+    if let Some(user) = &user {
+        auth_service
+            .check_permission(&user.id, "docs.read", Some(&space.id))
+            .await?;
+    }
+    
+    // 获取文档树结构
+    let tree = document_service.get_document_tree(&space.id).await?;
 
     Ok(Json(json!({
         "success": true,
-        "data": result,
+        "data": tree,
         "message": "Document tree retrieved successfully"
     })))
 }
@@ -146,8 +205,28 @@ async fn get_document_children(
     Path((space_slug, doc_slug)): Path<(String, String)>,
     OptionalUser(user): OptionalUser,
 ) -> Result<Json<Value>> {
-    // TODO: Implement proper document children retrieval
-    let children = serde_json::json!([]);
+    let space_service = &app_state.space_service;
+    let document_service = &app_state.document_service;
+    let auth_service = &app_state.auth_service;
+    
+    // 根据slug获取space
+    let space = space_service.get_space_by_slug(&space_slug, user.as_ref()).await?;
+    
+    // 检查读取权限
+    if let Some(user) = &user {
+        auth_service
+            .check_permission(&user.id, "docs.read", Some(&space.id))
+            .await?;
+    }
+    
+    // 根据slug获取document
+    let document = document_service.get_document_by_slug(&space.id, &doc_slug).await?;
+    
+    // 获取文档子级
+    let document_id = document.id.as_ref().ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("Document ID is missing"))
+    })?;
+    let children = document_service.get_document_children(document_id).await?;
 
     Ok(Json(json!({
         "success": true,
@@ -163,8 +242,28 @@ async fn get_document_breadcrumbs(
     Path((space_slug, doc_slug)): Path<(String, String)>,
     OptionalUser(user): OptionalUser,
 ) -> Result<Json<Value>> {
-    // TODO: Implement proper document breadcrumbs retrieval
-    let breadcrumbs = serde_json::json!([]);
+    let space_service = &app_state.space_service;
+    let document_service = &app_state.document_service;
+    let auth_service = &app_state.auth_service;
+    
+    // 根据slug获取space
+    let space = space_service.get_space_by_slug(&space_slug, user.as_ref()).await?;
+    
+    // 检查读取权限
+    if let Some(user) = &user {
+        auth_service
+            .check_permission(&user.id, "docs.read", Some(&space.id))
+            .await?;
+    }
+    
+    // 根据slug获取document
+    let document = document_service.get_document_by_slug(&space.id, &doc_slug).await?;
+    
+    // 获取文档面包屑
+    let document_id = document.id.as_ref().ok_or_else(|| {
+        AppError::Internal(anyhow::anyhow!("Document ID is missing"))
+    })?;
+    let breadcrumbs = document_service.get_document_breadcrumbs(document_id).await?;
 
     Ok(Json(json!({
         "success": true,

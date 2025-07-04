@@ -27,23 +27,84 @@ pub fn router() -> Router<Arc<crate::AppState>> {
 async fn upload_file(
     State(app_state): State<Arc<crate::AppState>>,
     headers: axum::http::HeaderMap,
-    multipart: Multipart,
+    mut multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
     let service = &app_state.file_upload_service;
     let auth_service = &app_state.auth_service;
     let user_id = extract_user_from_header(&headers, &auth_service).await?;
     
     // 从 multipart 中提取请求参数
-    let request = UploadFileRequest {
-        space_id: None, // TODO: 从 multipart 中提取
-        document_id: None, // TODO: 从 multipart 中提取
-        description: None,
-    };
-
-    let file_response = service.upload_file(&user_id, multipart, request).await?;
+    let mut space_id = None;
+    let mut document_id = None;
+    let mut description = None;
     
-    info!("File uploaded by user {}", user_id);
-    Ok((StatusCode::CREATED, Json(file_response)))
+    // 预处理multipart数据，提取参数
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        ApiError::bad_request(format!("Failed to read multipart field: {}", e))
+    })? {
+        let field_name = field.name().unwrap_or("");
+        
+        match field_name {
+            "space_id" => {
+                space_id = Some(field.text().await.map_err(|e| {
+                    ApiError::bad_request(format!("Failed to read space_id: {}", e))
+                })?);
+            }
+            "document_id" => {
+                document_id = Some(field.text().await.map_err(|e| {
+                    ApiError::bad_request(format!("Failed to read document_id: {}", e))
+                })?);
+            }
+            "description" => {
+                description = Some(field.text().await.map_err(|e| {
+                    ApiError::bad_request(format!("Failed to read description: {}", e))
+                })?);
+            }
+            "file" => {
+                // 重新构造包含文件的multipart
+                use axum::extract::multipart::Field;
+                use axum::extract::Multipart;
+                
+                // 对于文件字段，我们需要重新构造multipart
+                // 这里我们需要改用直接处理字段的方式
+                let filename = field.file_name().map(|s| s.to_string());
+                let content_type = field.content_type().map(|s| s.to_string());
+                let data = field.bytes().await.map_err(|e| {
+                    ApiError::bad_request(format!("Failed to read file data: {}", e))
+                })?;
+                
+                // 检查文件大小
+                if data.len() > 10 * 1024 * 1024 { // 10MB limit
+                    return Err(ApiError::bad_request(
+                        "File size exceeds maximum allowed size of 10MB".to_string()
+                    ));
+                }
+                
+                let request = UploadFileRequest {
+                    space_id,
+                    document_id,
+                    description,
+                };
+                
+                // 直接调用service处理文件上传
+                let file_response = service.upload_file_from_bytes(
+                    &user_id,
+                    data,
+                    filename.ok_or_else(|| ApiError::bad_request("No filename provided".to_string()))?,
+                    content_type,
+                    request
+                ).await?;
+                
+                info!("File uploaded by user {}", user_id);
+                return Ok((StatusCode::CREATED, Json(file_response)));
+            }
+            _ => {
+                // 忽略其他字段
+            }
+        }
+    }
+    
+    Err(ApiError::bad_request("No file found in request".to_string()))
 }
 
 async fn list_files(

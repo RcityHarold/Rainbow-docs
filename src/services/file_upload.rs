@@ -169,6 +169,109 @@ impl FileUploadService {
         Ok(created_file.into())
     }
 
+    pub async fn upload_file_from_bytes(
+        &self,
+        user_id: &str,
+        file_data: axum::body::Bytes,
+        original_name: String,
+        content_type: Option<String>,
+        request: UploadFileRequest,
+    ) -> Result<FileResponse, ApiError> {
+        request.validate()?;
+
+        // 确保上传目录存在
+        self.ensure_upload_dir_exists().await?;
+
+        // 检查文件大小
+        if file_data.len() > self.max_file_size {
+            return Err(ApiError::bad_request(format!(
+                "File size exceeds maximum allowed size of {} bytes",
+                self.max_file_size
+            )));
+        }
+
+        // 生成唯一文件名
+        let file_extension = Path::new(&original_name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("");
+        
+        let unique_filename = if file_extension.is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            format!("{}.{}", Uuid::new_v4(), file_extension)
+        };
+
+        // 确定 MIME 类型
+        let mime_type = content_type.unwrap_or_else(|| {
+            from_path(&original_name).first_or_octet_stream().to_string()
+        });
+
+        // 验证文件类型
+        self.validate_file_type(&mime_type)?;
+
+        // 创建文件路径
+        let file_path = Path::new(&self.upload_dir).join(&unique_filename);
+        
+        // 保存文件
+        async_fs::write(&file_path, &file_data).await.map_err(|e| {
+            error!("Failed to save file: {}", e);
+            ApiError::internal_server_error("Failed to save file".to_string())
+        })?;
+
+        // 如果是图片，生成缩略图
+        if mime_type.starts_with("image/") {
+            if let Err(e) = self.generate_thumbnail(&file_path, &unique_filename).await {
+                warn!("Failed to generate thumbnail for {}: {}", unique_filename, e);
+            }
+        }
+
+        // 确定文件类型
+        let file_type = self.determine_file_type(&mime_type);
+
+        // 保存到数据库
+        let mut file_upload = FileUpload::new(
+            unique_filename.clone(),
+            original_name,
+            file_path.to_string_lossy().to_string(),
+            file_data.len() as i64,
+            file_type,
+            mime_type,
+            user_id.to_string(),
+        );
+
+        // 设置关联的空间或文档
+        if let Some(space_id) = &request.space_id {
+            if let Ok(space_thing) = space_id.parse::<Thing>() {
+                file_upload = file_upload.with_space(space_thing);
+            }
+        }
+
+        if let Some(document_id) = &request.document_id {
+            if let Ok(doc_thing) = document_id.parse::<Thing>() {
+                file_upload = file_upload.with_document(doc_thing);
+            }
+        }
+
+        let created_files: Vec<FileUpload> = self.db.client
+            .create("file_upload")
+            .content(file_upload)
+            .await
+            .map_err(|e| {
+                error!("Failed to save file to database: {}", e);
+                ApiError::internal_server_error("Failed to save file metadata".to_string())
+            })?;
+
+        let created_file = created_files.into_iter().next();
+
+        let created_file = created_file.ok_or_else(|| {
+            ApiError::internal_server_error("Failed to create file record".to_string())
+        })?;
+
+        info!("File uploaded successfully: {}", unique_filename);
+        Ok(created_file.into())
+    }
+
     pub async fn get_file(&self, file_id: &str) -> Result<FileUpload, ApiError> {
         let file_thing = file_id.parse::<Thing>()
             .map_err(|_| ApiError::bad_request("Invalid file ID".to_string()))?;
@@ -275,8 +378,27 @@ impl FileUploadService {
 
         // 检查权限
         if file.uploaded_by != user_id {
-            // TODO: 检查空间权限
-            return Err(ApiError::forbidden("Permission denied".to_string()));
+            // 检查是否有空间管理权限
+            if let Some(space_id) = &file.space_id {
+                let space_id_string = space_id.to_string();
+                let space_id_str = space_id_string
+                    .split(':')
+                    .nth(1)
+                    .ok_or_else(|| ApiError::internal_server_error("Invalid space ID format".to_string()))?;
+                
+                // 检查用户是否有空间的管理权限
+                match self.auth_service.check_permission(user_id, "docs.admin", Some(space_id_str)).await {
+                    Ok(_) => {
+                        // 用户有管理权限，可以删除
+                    }
+                    Err(_) => {
+                        return Err(ApiError::forbidden("Permission denied: You can only delete your own files or need admin permission".to_string()));
+                    }
+                }
+            } else {
+                // 没有关联空间的文件，只有上传者可以删除
+                return Err(ApiError::forbidden("Permission denied: You can only delete your own files".to_string()));
+            }
         }
 
         // 标记为删除

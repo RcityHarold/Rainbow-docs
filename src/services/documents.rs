@@ -4,7 +4,7 @@ use validator::Validate;
 
 use crate::{
     error::ApiError,
-    models::document::{Document, CreateDocumentRequest, UpdateDocumentRequest},
+    models::document::{Document, CreateDocumentRequest, UpdateDocumentRequest, DocumentTreeNode},
     models::version::{CreateVersionRequest, VersionChangeType},
     services::{auth::AuthService, search::SearchService, versions::VersionService, database::Database},
     utils::markdown::MarkdownProcessor,
@@ -50,16 +50,131 @@ impl DocumentService {
         query: crate::models::document::DocumentQuery,
         user: Option<&crate::services::auth::User>,
     ) -> Result<serde_json::Value, ApiError> {
-        use crate::models::document::DocumentQuery;
+        use crate::models::document::{DocumentQuery, DocumentListItem, DocumentListResponse};
         
-        // For now, return a simple mock response
-        // TODO: Implement proper document listing with space filtering and pagination
-        Ok(serde_json::json!({
-            "documents": [],
-            "total": 0,
-            "page": query.page.unwrap_or(1),
-            "limit": query.limit.unwrap_or(20)
-        }))
+        // 首先根据slug获取space_id
+        let space_query = "SELECT id FROM space WHERE slug = $slug AND is_deleted = false";
+        let mut space_result = self.db.client
+            .query(space_query)
+            .bind(("slug", space_slug))
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+        
+        let spaces: Vec<serde_json::Value> = space_result
+            .take(0)
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+        
+        let space = spaces.first().ok_or_else(|| {
+            ApiError::NotFound("Space not found".to_string())
+        })?;
+        
+        let space_id = space.get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("Invalid space ID")))?
+            .split(':')
+            .nth(1)
+            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("Invalid space ID format")))?;
+
+        // 检查权限
+        if let Some(user) = user {
+            self.auth_service
+                .check_permission(&user.id, "docs.read", Some(space_id))
+                .await?;
+        }
+
+        // 构建查询条件
+        let page = query.page.unwrap_or(1);
+        let limit = query.limit.unwrap_or(20);
+        let offset = (page - 1) * limit;
+
+        let mut where_conditions = vec![
+            "space_id = $space_id".to_string(),
+            "is_deleted = false".to_string()
+        ];
+
+        let mut bindings = vec![
+            ("space_id", serde_json::Value::String(format!("space:{}", space_id))),
+            ("limit", serde_json::Value::Number(limit.into())),
+            ("offset", serde_json::Value::Number(offset.into()))
+        ];
+
+        // 添加搜索条件
+        if let Some(search) = &query.search {
+            where_conditions.push("(title CONTAINS $search OR content CONTAINS $search)".to_string());
+            bindings.push(("search", serde_json::Value::String(search.clone())));
+        }
+
+        // 添加父文档过滤
+        if let Some(parent_id) = &query.parent_id {
+            where_conditions.push("parent_id = $parent_id".to_string());
+            bindings.push(("parent_id", serde_json::Value::String(format!("document:{}", parent_id))));
+        }
+
+        // 添加发布状态过滤
+        if let Some(is_published) = query.is_published {
+            where_conditions.push("is_published = $is_published".to_string());
+            bindings.push(("is_published", serde_json::Value::Bool(is_published)));
+        }
+
+        let where_clause = where_conditions.join(" AND ");
+
+        // 查询文档列表
+        let documents_query = format!(
+            "SELECT id, title, slug, excerpt, is_published, created_at, updated_at, sort_order 
+             FROM document 
+             WHERE {} 
+             ORDER BY sort_order ASC, created_at DESC 
+             LIMIT $limit START $offset",
+            where_clause
+        );
+
+        let mut documents_result = self.db.client.query(&documents_query);
+        for (key, value) in &bindings {
+            documents_result = documents_result.bind((key, value));
+        }
+
+        let documents: Vec<DocumentListItem> = documents_result
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+            .take(0)
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        // 查询总数
+        let count_query = format!(
+            "SELECT count() FROM document WHERE {} GROUP ALL",
+            where_clause
+        );
+
+        let mut count_result = self.db.client.query(&count_query);
+        for (key, value) in &bindings {
+            if *key != "limit" && *key != "offset" {
+                count_result = count_result.bind((key, value));
+            }
+        }
+
+        let count_results: Vec<serde_json::Value> = count_result
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+            .take(0)
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        let total = count_results
+            .first()
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+
+        let total_pages = (total + limit - 1) / limit;
+
+        let response = DocumentListResponse {
+            documents,
+            total,
+            page,
+            limit,
+            total_pages,
+        };
+
+        Ok(serde_json::to_value(response)
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("Serialization error: {}", e)))?)
     }
 
     pub async fn create_document(
@@ -311,6 +426,78 @@ impl DocumentService {
         Ok(children)
     }
 
+    pub async fn get_document_tree(&self, space_id: &str) -> Result<Vec<DocumentTreeNode>, ApiError> {
+        // 获取空间内所有文档
+        let query = "
+            SELECT * FROM document 
+            WHERE space_id = $space_id 
+            AND is_deleted = false
+            ORDER BY sort_order ASC, created_at ASC
+        ";
+
+        let all_documents: Vec<Document> = self.db.client
+            .query(query)
+            .bind(("space_id", Thing::from(("space", space_id))))
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+            .take(0)
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        // 构建文档映射
+        let mut doc_map = std::collections::HashMap::new();
+        let mut root_docs = Vec::new();
+
+        for doc in all_documents {
+            if let Some(doc_id) = &doc.id {
+                let node = DocumentTreeNode {
+                    id: doc_id.clone(),
+                    title: doc.title.clone(),
+                    slug: doc.slug.clone(),
+                    is_published: doc.is_published,
+                    sort_order: doc.sort_order,
+                    children: Vec::new(),
+                };
+                
+                if doc.parent_id.is_none() {
+                    root_docs.push(doc_id.clone());
+                }
+                
+                doc_map.insert(doc_id.clone(), (node, doc.parent_id.clone()));
+            }
+        }
+
+        // 构建树结构
+        let mut tree_map = std::collections::HashMap::new();
+        for (doc_id, (node, parent_id)) in doc_map {
+            if parent_id.is_none() {
+                tree_map.insert(doc_id, node);
+            } else if let Some(parent_id_str) = parent_id {
+                if let Some(parent_id_thing) = parent_id_str.to_string().split(':').nth(1) {
+                    tree_map.entry(parent_id_thing.to_string())
+                        .or_insert_with(|| DocumentTreeNode {
+                            id: parent_id_thing.to_string(),
+                            title: "Unknown".to_string(),
+                            slug: "unknown".to_string(),
+                            is_published: false,
+                            sort_order: 0,
+                            children: Vec::new(),
+                        })
+                        .children.push(node);
+                }
+            }
+        }
+
+        // 返回根节点
+        let mut result = Vec::new();
+        for root_id in root_docs {
+            if let Some(node) = tree_map.remove(&root_id) {
+                result.push(node);
+            }
+        }
+
+        Ok(result)
+    }
+
     pub async fn move_document(
         &self,
         document_id: &str,
@@ -413,6 +600,30 @@ impl DocumentService {
         }
 
         Ok(created_document)
+    }
+
+    pub async fn get_document_by_slug(&self, space_id: &str, slug: &str) -> Result<Document, ApiError> {
+        let query = "
+            SELECT * FROM document 
+            WHERE space_id = $space_id 
+            AND slug = $slug 
+            AND is_deleted = false
+        ";
+
+        let mut result = self.db.client
+            .query(query)
+            .bind(("space_id", Thing::from(("space", space_id))))
+            .bind(("slug", slug))
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        let documents: Vec<Document> = result
+            .take(0)
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        documents.into_iter()
+            .next()
+            .ok_or_else(|| ApiError::NotFound("Document not found".to_string()))
     }
 
     async fn document_slug_exists(&self, space_id: &str, slug: &str) -> Result<bool, ApiError> {
