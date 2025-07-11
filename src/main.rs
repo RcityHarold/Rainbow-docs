@@ -55,6 +55,18 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting Rainbow-Docs service...");
 
+    // 检查是否需要显示安装界面
+    #[cfg(feature = "installer")]
+    {
+        use crate::utils::installer::InstallationChecker;
+        if let Ok(should_install) = InstallationChecker::should_show_installer() {
+            if should_install {
+                info!("System not installed, enabling installer routes");
+                return start_installer_mode().await;
+            }
+        }
+    }
+
     // 加载配置
     dotenv::dotenv().ok();
     let config = Config::from_env()?;
@@ -137,5 +149,31 @@ async fn main() -> anyhow::Result<()> {
         .serve(app.into_make_service())
         .await?;
 
+    Ok(())
+}
+
+#[cfg(feature = "installer")]
+async fn start_installer_mode() -> anyhow::Result<()> {
+    use crate::routes::installer::installer_routes;
+    
+    info!("Starting in installer mode...");
+    
+    // 创建简化的安装路由
+    let app = Router::new()
+        .nest("/api/install", installer_routes())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        );
+    
+    // 启动服务器
+    let addr = "0.0.0.0:3000";
+    info!("Rainbow-Docs installer listening on {}", addr);
+    axum::Server::bind(&addr.parse()?)
+        .serve(app.into_make_service())
+        .await?;
+    
     Ok(())
 }

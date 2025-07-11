@@ -71,6 +71,7 @@ lettre = { version = "0.10", features = ["builder", "smtp-transport", "tokio1-na
 
 [features]
 default = ["notifications"]
+installer = []
 pdf-export = ["wkhtmltopdf"]
 notifications = ["lettre"]
 

@@ -6,3 +6,6 @@ pub mod spaces;
 pub mod stats;
 pub mod tags;
 pub mod versions;
+
+#[cfg(feature = "installer")]
+pub mod installer;
