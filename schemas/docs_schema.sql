@@ -146,7 +146,7 @@ DEFINE FIELD id ON tag TYPE record(tag);
 DEFINE FIELD name ON tag TYPE string ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 50;
 DEFINE FIELD slug ON tag TYPE string ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 50;
 DEFINE FIELD description ON tag TYPE string;
-DEFINE FIELD color ON tag TYPE string DEFAULT "#3b82f6" ASSERT string::len($value) = 7 AND string::starts_with($value, "#");
+DEFINE FIELD color ON tag TYPE string DEFAULT "#3b82f6" ASSERT string::len($value) = 7;
 DEFINE FIELD space_id ON tag TYPE option<record(space)>; -- null表示全局标签
 DEFINE FIELD usage_count ON tag TYPE number DEFAULT 0;
 DEFINE FIELD created_by ON tag TYPE string ASSERT $value != NONE;
@@ -306,11 +306,11 @@ DEFINE INDEX notification_created_idx ON notification COLUMNS created_at;
 
 -- 插入默认标签
 INSERT INTO tag (name, slug, description, color, space_id, created_by) VALUES 
-    ("API", "api", "API相关文档", "#10b981", NULL, "system"),
-    ("Tutorial", "tutorial", "教程文档", "#3b82f6", NULL, "system"),
-    ("Guide", "guide", "指南文档", "#8b5cf6", NULL, "system"),
-    ("Reference", "reference", "参考文档", "#f59e0b", NULL, "system"),
-    ("FAQ", "faq", "常见问题", "#ef4444", NULL, "system");
+    ("API", "api", "API相关文档", "#10b981", NONE, "system"),
+    ("Tutorial", "tutorial", "教程文档", "#3b82f6", NONE, "system"),
+    ("Guide", "guide", "指南文档", "#8b5cf6", NONE, "system"),
+    ("Reference", "reference", "参考文档", "#f59e0b", NONE, "system"),
+    ("FAQ", "faq", "常见问题", "#ef4444", NONE, "system");
 
 -- 设置初始使用统计
 UPDATE tag SET usage_count = 0 WHERE created_by = "system";

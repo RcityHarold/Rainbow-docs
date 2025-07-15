@@ -55,7 +55,7 @@ impl Database {
         // 尝试执行一个简单的查询来验证连接
         let _: Vec<serde_json::Value> = self
             .client
-            .query("SELECT 1 as test")
+            .query("INFO FOR DB")
             .await
             .map_err(|e| {
                 error!("Database connection verification failed: {}", e);

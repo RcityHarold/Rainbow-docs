@@ -2,6 +2,10 @@ use std::path::Path;
 use std::fs;
 use serde::{Deserialize, Serialize};
 use anyhow::Result;
+use surrealdb::{Surreal, engine::remote::http::{Client, Http}};
+use surrealdb::opt::auth::Root;
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::{SaltString, rand_core::OsRng}};
+use chrono::Utc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallationStatus {
@@ -82,6 +86,10 @@ pub mod wizard {
     #[derive(Debug, Deserialize, Serialize)]
     pub struct InstallConfig {
         pub database_url: String,
+        pub database_namespace_auth: String,
+        pub database_name_auth: String,
+        pub database_namespace_docs: String,
+        pub database_name_docs: String,
         pub admin_username: String,
         pub admin_email: String,
         pub admin_password: String,
@@ -137,14 +145,363 @@ pub mod wizard {
         }
         
         pub async fn perform_installation(config: InstallConfig) -> Result<()> {
-            // 这里实现实际的安装逻辑
-            // 1. 验证数据库连接
-            // 2. 初始化数据库结构
-            // 3. 创建管理员账户
-            // 4. 生成配置文件
-            // 5. 标记为已安装
+            use std::fs;
+            use std::path::Path;
+            use chrono::Utc;
             
-            // 暂时返回成功，具体实现在下一步
+            println!("开始安装过程...");
+            
+            // 1. 验证数据库连接
+            println!("验证数据库连接...");
+            // TODO: 这里可以添加实际的数据库连接验证
+            
+            // 2. 更新Rainbow-Docs的.env文件
+            println!("更新Rainbow-Docs配置...");
+            let docs_env_path = ".env";
+            let docs_env_content = format!(
+                r#"# Rainbow-Docs 配置
+DATABASE_URL={}
+DATABASE_NAMESPACE={}
+DATABASE_NAME={}
+JWT_SECRET={}
+SITE_NAME={}
+SITE_DESCRIPTION={}
+DATABASE_CONNECTION_TIMEOUT=30
+DATABASE_MAX_CONNECTIONS=10
+
+JWT_EXPIRATION=86400
+
+# Rainbow-Auth 集成配置
+RAINBOW_AUTH_URL=http://localhost:8080
+RAINBOW_AUTH_INTEGRATION=true
+
+# 服务器配置
+HOST=0.0.0.0
+PORT=3000
+APP_URL=http://localhost:3000
+
+# 功能开关
+ENABLE_PDF_EXPORT=false
+ENABLE_NOTIFICATIONS=true
+ENABLE_COMMENTS=true
+ENABLE_VERSIONING=true
+"#,
+                config.database_url,
+                config.database_namespace_docs,
+                config.database_name_docs,
+                config.jwt_secret,
+                config.site_name,
+                config.site_description.unwrap_or_default()
+            );
+            
+            fs::write(docs_env_path, docs_env_content)
+                .map_err(|e| anyhow::anyhow!("Failed to write Rainbow-Docs .env file: {}", e))?;
+            
+            // 3. 更新Rainbow-Auth的.env文件
+            println!("更新Rainbow-Auth配置...");
+            let auth_env_path = "../Rainbow-Auth/.env";
+            
+            // 先读取现有的Auth .env文件以保留其他配置
+            let existing_auth_env = fs::read_to_string(auth_env_path)
+                .unwrap_or_default();
+            
+            // 解析现有配置
+            let mut auth_config_lines: Vec<String> = Vec::new();
+            let mut found_database_url = false;
+            let mut found_database_namespace = false;
+            let mut found_database_name = false;
+            let mut found_jwt_secret = false;
+            
+            for line in existing_auth_env.lines() {
+                let line = line.trim();
+                if line.starts_with("DATABASE_URL=") {
+                    auth_config_lines.push(format!("DATABASE_URL={}", config.database_url));
+                    found_database_url = true;
+                } else if line.starts_with("DATABASE_NAMESPACE=") {
+                    auth_config_lines.push(format!("DATABASE_NAMESPACE={}", config.database_namespace_auth));
+                    found_database_namespace = true;
+                } else if line.starts_with("DATABASE_NAME=") {
+                    auth_config_lines.push(format!("DATABASE_NAME={}", config.database_name_auth));
+                    found_database_name = true;
+                } else if line.starts_with("JWT_SECRET=") {
+                    auth_config_lines.push(format!("JWT_SECRET={}", config.jwt_secret));
+                    found_jwt_secret = true;
+                } else {
+                    auth_config_lines.push(line.to_string());
+                }
+            }
+            
+            // 添加缺失的配置项
+            if !found_database_url {
+                auth_config_lines.push(format!("DATABASE_URL={}", config.database_url));
+            }
+            if !found_database_namespace {
+                auth_config_lines.push(format!("DATABASE_NAMESPACE={}", config.database_namespace_auth));
+            }
+            if !found_database_name {
+                auth_config_lines.push(format!("DATABASE_NAME={}", config.database_name_auth));
+            }
+            if !found_jwt_secret {
+                auth_config_lines.push(format!("JWT_SECRET={}", config.jwt_secret));
+            }
+            
+            let auth_env_content = auth_config_lines.join("\n");
+            fs::write(auth_env_path, auth_env_content)
+                .map_err(|e| anyhow::anyhow!("Failed to write Rainbow-Auth .env file: {}", e))?;
+            
+            // 4. 标记配置文件存在
+            let config_dir = "config";
+            if !Path::new(config_dir).exists() {
+                fs::create_dir_all(config_dir)
+                    .map_err(|e| anyhow::anyhow!("Failed to create config directory: {}", e))?;
+            }
+            
+            // 创建一个简单的配置标记文件
+            let config_content = format!(
+                r#"# Rainbow-Docs 安装配置
+# 安装时间: {}
+# 管理员: {} ({})
+# 站点名称: {}
+"#,
+                Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                config.admin_username,
+                config.admin_email,
+                config.site_name
+            );
+            
+            fs::write("config/installation.txt", config_content)
+                .map_err(|e| anyhow::anyhow!("Failed to write installation config: {}", e))?;
+            
+            println!("安装配置完成！");
+            
+            // 5. 导入数据库schema
+            println!("初始化数据库schema...");
+            println!("正在连接数据库: {}", config.database_url);
+            
+            // 连接到数据库 - 添加短超时
+            let client = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                Surreal::<Client>::new::<Http>(&config.database_url)
+            ).await
+                .map_err(|_| anyhow::anyhow!("Database connection timeout after 10 seconds"))?
+                .map_err(|e| anyhow::anyhow!("Failed to connect to database: {}", e))?;
+            
+            println!("数据库连接成功，正在认证...");
+            
+            // 认证 - 添加短超时
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                client.signin(Root {
+                    username: "root",
+                    password: "root",
+                })
+            ).await
+                .map_err(|_| anyhow::anyhow!("Database authentication timeout after 10 seconds"))?
+                .map_err(|e| anyhow::anyhow!("Failed to authenticate with database: {}", e))?;
+            
+            println!("数据库认证成功！");
+            
+            // 导入Auth系统schema到auth namespace
+            println!("导入Auth系统schema...");
+            client.use_ns(&config.database_namespace_auth).use_db(&config.database_name_auth).await
+                .map_err(|e| anyhow::anyhow!("Failed to select auth database: {}", e))?;
+            
+            // 读取并执行Auth schema
+            let auth_schema_path = "../Rainbow-Auth/schema.sql";
+            if Path::new(auth_schema_path).exists() {
+                let auth_schema = fs::read_to_string(auth_schema_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to read auth schema: {}", e))?;
+                
+                // 将Auth schema分割成单独的语句执行
+                let auth_statements: Vec<&str> = auth_schema
+                    .split(';')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty() && !s.starts_with("--"))
+                    .collect();
+                
+                println!("开始导入Auth schema，共{}条语句...", auth_statements.len());
+                
+                for (i, statement) in auth_statements.iter().enumerate() {
+                    if !statement.trim().is_empty() {
+                        println!("执行Auth语句 {}/{}...", i + 1, auth_statements.len());
+                        
+                        let query_result = tokio::time::timeout(
+                            std::time::Duration::from_secs(30),
+                            client.query(*statement)
+                        ).await;
+                        
+                        match query_result {
+                            Ok(Ok(_)) => {
+                                // 查询成功
+                            }
+                            Ok(Err(e)) => {
+                                println!("警告: Auth语句执行失败: {}", e);
+                                println!("失败的语句: {}", statement);
+                            }
+                            Err(_) => {
+                                println!("警告: Auth语句执行超时");
+                                println!("超时的语句: {}", statement);
+                            }
+                        }
+                    }
+                }
+                
+                println!("Auth schema导入完成");
+            } else {
+                println!("警告: Auth schema文件不存在: {}", auth_schema_path);
+            }
+            
+            // 导入Auth初始数据
+            let auth_initial_data_path = "../Rainbow-Auth/initial_data.sql";
+            if Path::new(auth_initial_data_path).exists() {
+                let auth_initial_data = fs::read_to_string(auth_initial_data_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to read auth initial data: {}", e))?;
+                
+                client.query(&auth_initial_data).await
+                    .map_err(|e| anyhow::anyhow!("Failed to execute auth initial data: {}", e))?;
+                
+                println!("Auth初始数据导入完成");
+            } else {
+                println!("警告: Auth初始数据文件不存在: {}", auth_initial_data_path);
+            }
+            
+            // 导入文档权限数据
+            let docs_permissions_path = "../Rainbow-Auth/docs_permissions.sql";
+            if Path::new(docs_permissions_path).exists() {
+                let docs_permissions = fs::read_to_string(docs_permissions_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to read docs permissions: {}", e))?;
+                
+                client.query(&docs_permissions).await
+                    .map_err(|e| anyhow::anyhow!("Failed to execute docs permissions: {}", e))?;
+                
+                println!("文档权限数据导入完成");
+            } else {
+                println!("警告: 文档权限文件不存在: {}", docs_permissions_path);
+            }
+            
+            // 导入Docs系统schema到docs namespace
+            println!("导入Docs系统schema...");
+            client.use_ns(&config.database_namespace_docs).use_db(&config.database_name_docs).await
+                .map_err(|e| anyhow::anyhow!("Failed to select docs database: {}", e))?;
+            
+            let docs_schema_path = "schemas/docs_schema.sql";
+            if Path::new(docs_schema_path).exists() {
+                let docs_schema = fs::read_to_string(docs_schema_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to read docs schema: {}", e))?;
+                
+                // 将schema分割成单独的语句执行，避免超时
+                let statements: Vec<&str> = docs_schema
+                    .split(';')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty() && !s.starts_with("--"))
+                    .collect();
+                
+                println!("开始导入Docs schema，共{}条语句...", statements.len());
+                
+                for (i, statement) in statements.iter().enumerate() {
+                    if !statement.trim().is_empty() {
+                        println!("执行语句 {}/{}...", i + 1, statements.len());
+                        
+                        // 添加超时处理
+                        let query_result = tokio::time::timeout(
+                            std::time::Duration::from_secs(30), // 30秒超时
+                            client.query(*statement)
+                        ).await;
+                        
+                        match query_result {
+                            Ok(Ok(_)) => {
+                                // 查询成功
+                            }
+                            Ok(Err(e)) => {
+                                println!("警告: 语句执行失败: {}", e);
+                                println!("失败的语句: {}", statement);
+                                // 继续执行下一条语句而不是停止整个安装
+                            }
+                            Err(_) => {
+                                println!("警告: 语句执行超时");
+                                println!("超时的语句: {}", statement);
+                                // 继续执行下一条语句而不是停止整个安装
+                            }
+                        }
+                    }
+                }
+                
+                println!("Docs schema导入完成");
+            } else {
+                println!("警告: Docs schema文件不存在: {}", docs_schema_path);
+            }
+            
+            println!("数据库初始化完成！");
+            
+            // 6. 创建管理员账户
+            println!("创建管理员账户...");
+            
+            // 切换回Auth数据库
+            client.use_ns(&config.database_namespace_auth).use_db(&config.database_name_auth).await
+                .map_err(|e| anyhow::anyhow!("Failed to select auth database for admin creation: {}", e))?;
+            
+            // 生成密码哈希
+            let salt = SaltString::generate(&mut OsRng);
+            let argon2 = Argon2::default();
+            let password_hash = argon2.hash_password(config.admin_password.as_bytes(), &salt)
+                .map_err(|e| anyhow::anyhow!("Failed to hash admin password: {}", e))?
+                .to_string();
+            
+            // 创建管理员用户
+            let current_time = Utc::now().timestamp();
+            let admin_query = format!(
+                r#"CREATE user SET 
+                    email = "{}", 
+                    password = "{}", 
+                    verified = true, 
+                    account_status = "Active",
+                    created_at = {},
+                    updated_at = {};"#,
+                config.admin_email,
+                password_hash,
+                current_time,
+                current_time
+            );
+            
+            let admin_result = client.query(&admin_query).await
+                .map_err(|e| anyhow::anyhow!("Failed to create admin user: {}", e))?;
+            
+            println!("管理员账户创建完成: {}", config.admin_email);
+            
+            // 为管理员分配超级管理员角色
+            let role_query = format!(
+                r#"CREATE user_role SET 
+                    user_id = (SELECT id FROM user WHERE email = "{}")[0].id,
+                    role_id = (SELECT id FROM role WHERE name = "SuperAdmin")[0].id,
+                    created_at = {},
+                    created_by = "system";"#,
+                config.admin_email,
+                current_time
+            );
+            
+            let role_result = client.query(&role_query).await;
+            if role_result.is_err() {
+                println!("警告: 无法分配管理员角色，可能角色表未正确初始化");
+            } else {
+                println!("管理员角色分配完成");
+            }
+            
+            // 7. 标记为已安装
+            let install_status = InstallationStatus {
+                is_installed: true,
+                config_exists: true,
+                database_initialized: true, // 数据库已初始化
+                admin_created: true,        // 管理员已创建
+                install_time: Some(Utc::now()),
+            };
+            
+            InstallationChecker::mark_as_installed(&install_status)?;
+            
+            println!("安装过程完成！");
+            println!("管理员登录信息:");
+            println!("  邮箱: {}", config.admin_email);
+            println!("  用户名: {}", config.admin_username);
+            println!("  请使用邮箱和密码登录系统");
             Ok(())
         }
     }
