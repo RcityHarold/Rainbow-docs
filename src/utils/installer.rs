@@ -32,7 +32,7 @@ pub struct InstallationChecker;
 
 impl InstallationChecker {
     const INSTALL_MARKER_FILE: &'static str = ".rainbow_docs_installed";
-    const CONFIG_FILE: &'static str = "config/production.toml";
+    const CONFIG_FILE: &'static str = ".env";
     
     /// 检查系统是否已安装
     pub fn check_installation_status() -> Result<InstallationStatus> {
@@ -456,15 +456,29 @@ ENABLE_VERSIONING=true
                     verified = true, 
                     account_status = "Active",
                     created_at = {},
-                    updated_at = {};"#,
+                    updated_at = {},
+                    last_login_at = {},
+                    last_login_ip = NULL,
+                    verification_token = NULL;"#,
                 config.admin_email,
                 password_hash,
+                current_time,
                 current_time,
                 current_time
             );
             
+            println!("执行管理员创建SQL: {}", admin_query);
             let admin_result = client.query(&admin_query).await
                 .map_err(|e| anyhow::anyhow!("Failed to create admin user: {}", e))?;
+            
+            println!("管理员创建查询结果: {:?}", admin_result);
+            
+            // 验证管理员用户是否真的被创建
+            let verify_query = format!("SELECT * FROM user WHERE email = \"{}\"", config.admin_email);
+            let verify_result = client.query(&verify_query).await
+                .map_err(|e| anyhow::anyhow!("Failed to verify admin user: {}", e))?;
+            
+            println!("验证管理员用户查询结果: {:?}", verify_result);
             
             println!("管理员账户创建完成: {}", config.admin_email);
             

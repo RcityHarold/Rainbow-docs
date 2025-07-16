@@ -7,7 +7,12 @@ use axum::{
     Router,
 };
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+#[cfg(feature = "installer")]
 use crate::utils::installer::{InstallationChecker, wizard::{InstallationWizard, InstallConfig}};
+
+use crate::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct InstallQuery {

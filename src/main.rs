@@ -132,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/search", routes::search::router())
         .nest("/api/stats", routes::stats::router())
         .nest("/api/versions", routes::versions::router())
+        .nest("/api/install", routes::installer::installer_routes().with_state(()))
         .with_state(Arc::new(app_state))
         .layer(Extension(shared_db))
         .layer(Extension(config.clone()))
