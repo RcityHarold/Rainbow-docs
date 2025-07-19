@@ -11,8 +11,8 @@ DEFINE TABLE space SCHEMAFULL;
 DEFINE FIELD id ON space TYPE record(space);
 DEFINE FIELD name ON space TYPE string ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 255;
 DEFINE FIELD slug ON space TYPE string ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 100;
-DEFINE FIELD description ON space TYPE string;
-DEFINE FIELD avatar_url ON space TYPE string;
+DEFINE FIELD description ON space TYPE option<string>;
+DEFINE FIELD avatar_url ON space TYPE option<string>;
 DEFINE FIELD is_public ON space TYPE bool DEFAULT false;
 DEFINE FIELD is_deleted ON space TYPE bool DEFAULT false;
 DEFINE FIELD owner_id ON space TYPE string ASSERT $value != NONE; -- Rainbow-Auth用户ID
@@ -22,8 +22,8 @@ DEFINE FIELD member_count ON space TYPE number DEFAULT 0;
 DEFINE FIELD document_count ON space TYPE number DEFAULT 0;
 DEFINE FIELD created_at ON space TYPE datetime DEFAULT time::now();
 DEFINE FIELD updated_at ON space TYPE datetime DEFAULT time::now();
-DEFINE FIELD created_by ON space TYPE string ASSERT $value != NONE;
-DEFINE FIELD updated_by ON space TYPE string;
+DEFINE FIELD created_by ON space TYPE option<string>;
+DEFINE FIELD updated_by ON space TYPE option<string>;
 
 -- 空间索引
 DEFINE INDEX space_slug_idx ON space COLUMNS slug UNIQUE;

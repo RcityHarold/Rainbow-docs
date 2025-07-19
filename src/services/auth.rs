@@ -40,11 +40,9 @@ struct CachedPermission {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,        // 用户ID
-    pub email: String,      // 用户邮箱
-    pub exp: usize,         // 过期时间
-    pub iat: usize,         // 签发时间
-    pub roles: Vec<String>, // 用户角色
-    pub permissions: Vec<String>, // 用户权限
+    pub exp: i64,           // 过期时间
+    pub iat: i64,           // 签发时间
+    pub session_id: Option<String>, // 会话ID
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,12 +344,12 @@ where
         if auth_service.config.auth.integration_mode {
             auth_service.get_user_from_rainbow_auth(&claims.sub, bearer.token()).await
         } else {
-            // Standalone mode: create user from JWT claims
+            // Standalone mode: create user from JWT claims with default values
             Ok(User {
                 id: claims.sub,
-                email: claims.email,
-                roles: claims.roles,
-                permissions: claims.permissions,
+                email: "unknown@example.com".to_string(), // 默认邮箱，因为JWT中没有
+                roles: vec!["user".to_string()], // 默认角色
+                permissions: vec!["docs.read".to_string(), "docs.write".to_string(), "spaces.read".to_string(), "spaces.write".to_string()], // 默认权限
                 profile: None,
             })
         }

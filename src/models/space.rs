@@ -2,6 +2,35 @@ use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use validator::Validate;
+use surrealdb::sql::Thing;
+
+// 用于从数据库读取的内部结构
+#[derive(Debug, Clone, Deserialize)]
+pub struct SpaceDb {
+    pub id: Option<Thing>,
+    pub name: String,
+    pub slug: String,
+    pub description: Option<String>,
+    pub avatar_url: Option<String>,
+    pub is_public: bool,
+    #[serde(default)]
+    pub is_deleted: Option<bool>,
+    pub owner_id: String,
+    #[serde(default)]
+    pub settings: SpaceSettings,
+    #[serde(default)]
+    pub theme_config: Option<SpaceSettings>,
+    #[serde(default)]
+    pub member_count: Option<u32>,
+    #[serde(default)]
+    pub document_count: Option<u32>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub created_by: Option<String>,
+    #[serde(default)]
+    pub updated_by: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Space {
@@ -11,13 +40,27 @@ pub struct Space {
     pub description: Option<String>,
     pub avatar_url: Option<String>,
     pub is_public: bool,
+    #[serde(default)]
+    pub is_deleted: Option<bool>,
     pub owner_id: String,
+    #[serde(default)]
     pub settings: SpaceSettings,
+    #[serde(default)]
+    pub theme_config: Option<SpaceSettings>,
+    #[serde(default)]
+    pub member_count: Option<u32>,
+    #[serde(default)]
+    pub document_count: Option<u32>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub created_by: Option<String>,
+    #[serde(default)]
+    pub updated_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SpaceSettings {
     pub theme: String,
     pub allow_comments: bool,
@@ -29,6 +72,7 @@ pub struct SpaceSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct NavigationSettings {
     pub show_breadcrumbs: bool,
     pub show_navigation: bool,
@@ -183,10 +227,16 @@ impl Space {
             description: None,
             avatar_url: None,
             is_public: false,
+            is_deleted: Some(false),
             owner_id,
             settings: SpaceSettings::default(),
+            theme_config: Some(SpaceSettings::default()),
+            member_count: Some(0),
+            document_count: Some(0),
             created_at: None,
             updated_at: None,
+            created_by: None,
+            updated_by: None,
         }
     }
 
@@ -202,6 +252,29 @@ impl Space {
         match user_id {
             Some(uid) => self.is_owner(uid),
             None => false,
+        }
+    }
+}
+
+impl From<SpaceDb> for Space {
+    fn from(db: SpaceDb) -> Self {
+        Self {
+            id: db.id.map(|thing| thing.id.to_string()),
+            name: db.name,
+            slug: db.slug,
+            description: db.description,
+            avatar_url: db.avatar_url,
+            is_public: db.is_public,
+            is_deleted: db.is_deleted,
+            owner_id: db.owner_id,
+            settings: db.settings,
+            theme_config: db.theme_config,
+            member_count: db.member_count,
+            document_count: db.document_count,
+            created_at: db.created_at,
+            updated_at: db.updated_at,
+            created_by: db.created_by,
+            updated_by: db.updated_by,
         }
     }
 }

@@ -55,16 +55,16 @@ impl SpaceService {
         }
 
         // 保存到数据库
-        let created_space: Option<Space> = self.db.client
+        let created_spaces: Vec<Space> = self.db.client
             .create("space")
             .content(&space)
             .await
             .map_err(|e| {
                 error!("Failed to create space: {}", e);
                 AppError::Database(e)
-            })?
-            .into_iter()
-            .next();
+            })?;
+
+        let created_space = created_spaces.into_iter().next();
 
         let created_space = created_space.ok_or_else(|| {
             error!("Failed to get created space from database");
@@ -144,12 +144,18 @@ impl SpaceService {
             where_clause, order_clause, limit, offset
         );
 
-        let spaces: Vec<Space> = self.db.client
+        // 首先获取数据库格式的数据
+        let spaces_db: Vec<crate::models::space::SpaceDb> = self.db.client
             .query(&data_query)
             .bind(params)
             .await
             .map_err(|e| AppError::Database(e))?
             .take(0)?;
+        
+        // 转换为 Space 类型
+        let spaces: Vec<Space> = spaces_db.into_iter()
+            .map(|db| db.into())
+            .collect();
 
         // 转换为响应格式
         let mut space_responses = Vec::new();
@@ -175,14 +181,15 @@ impl SpaceService {
 
     /// 根据slug获取空间详情
     pub async fn get_space_by_slug(&self, slug: &str, user: Option<&User>) -> Result<SpaceResponse> {
-        let space: Option<Space> = self.db.client
+        let space_db: Option<crate::models::space::SpaceDb> = self.db.client
             .query("SELECT * FROM space WHERE slug = $slug")
             .bind(("slug", slug))
             .await
             .map_err(|e| AppError::Database(e))?
             .take(0)?;
 
-        let space = space.ok_or_else(|| AppError::NotFound("Space not found".to_string()))?;
+        let space_db = space_db.ok_or_else(|| AppError::NotFound("Space not found".to_string()))?;
+        let space: Space = space_db.into();
 
         // 检查访问权限
         if !space.can_access(user.map(|u| u.id.as_str())) {
@@ -240,7 +247,7 @@ impl SpaceService {
         update_data.insert("updated_at", Value::String(chrono::Utc::now().to_rfc3339()));
 
         // 执行更新
-        let updated_space: Option<Space> = self.db.client
+        let updated_space_db: Option<crate::models::space::SpaceDb> = self.db.client
             .query("UPDATE space SET $data WHERE slug = $slug RETURN AFTER")
             .bind(("data", update_data))
             .bind(("slug", slug))
@@ -248,9 +255,10 @@ impl SpaceService {
             .map_err(|e| AppError::Database(e))?
             .take((0, "AFTER"))?;
 
-        let updated_space = updated_space.ok_or_else(|| {
+        let updated_space_db = updated_space_db.ok_or_else(|| {
             AppError::Internal(anyhow::anyhow!("Failed to update space"))
         })?;
+        let updated_space: Space = updated_space_db.into();
 
         info!("Updated space: {} by user: {}", slug, user.id);
 
@@ -285,7 +293,7 @@ impl SpaceService {
         }
 
         // 删除空间
-        let _: Option<Space> = self.db.client
+        let _: Option<crate::models::space::SpaceDb> = self.db.client
             .query("DELETE space WHERE slug = $slug")
             .bind(("slug", slug))
             .await
@@ -302,7 +310,7 @@ impl SpaceService {
 
     /// 检查slug是否已存在
     async fn slug_exists(&self, slug: &str) -> Result<bool> {
-        let existing: Option<Space> = self.db.client
+        let existing: Option<crate::models::space::SpaceDb> = self.db.client
             .query("SELECT id FROM space WHERE slug = $slug LIMIT 1")
             .bind(("slug", slug))
             .await
