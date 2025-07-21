@@ -291,9 +291,9 @@ mod tests {
             slug: "test-doc".to_string(),
             content: None,
             excerpt: None,
-            is_published: None,
+            is_public: None,
             parent_id: None,
-            sort_order: None,
+            order_index: None,
             metadata: None,
         };
 
@@ -307,9 +307,9 @@ mod tests {
             slug: "test-document".to_string(),
             content: Some("# Test Content".to_string()),
             excerpt: None,
-            is_published: Some(true),
+            is_public: Some(true),
             parent_id: None,
-            sort_order: Some(1),
+            order_index: Some(1),
             metadata: None,
         };
 
@@ -320,9 +320,9 @@ mod tests {
             slug: "Test Document".to_string(), // 无效：包含空格和大写
             content: None,
             excerpt: None,
-            is_published: None,
+            is_public: None,
             parent_id: None,
-            sort_order: None,
+            order_index: None,
             metadata: None,
         };
 
@@ -338,9 +338,9 @@ mod tests {
             slug: "test-doc".to_string(),
             content: None,
             excerpt: None,
-            is_published: None,
+            is_public: None,
             parent_id: None,
-            sort_order: None,
+            order_index: None,
             metadata: None,
         };
 

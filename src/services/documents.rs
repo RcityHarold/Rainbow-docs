@@ -1,10 +1,11 @@
 use std::sync::Arc;
 use surrealdb::{sql::Thing, Surreal, engine::remote::ws::Client};
 use validator::Validate;
+use chrono::Utc;
 
 use crate::{
     error::ApiError,
-    models::document::{Document, CreateDocumentRequest, UpdateDocumentRequest, DocumentTreeNode},
+    models::document::{Document, CreateDocumentRequest, UpdateDocumentRequest, DocumentTreeNode, DocumentMetadata},
     models::version::{CreateVersionRequest, VersionChangeType},
     services::{auth::AuthService, search::SearchService, versions::VersionService, database::Database},
     utils::markdown::MarkdownProcessor,
@@ -111,19 +112,19 @@ impl DocumentService {
         }
 
         // 添加发布状态过滤
-        if let Some(is_published) = query.is_published {
-            where_conditions.push("is_published = $is_published".to_string());
-            bindings.push(("is_published", serde_json::Value::Bool(is_published)));
+        if let Some(is_public) = query.is_public {
+            where_conditions.push("is_public = $is_public".to_string());
+            bindings.push(("is_public", serde_json::Value::Bool(is_public)));
         }
 
         let where_clause = where_conditions.join(" AND ");
 
         // 查询文档列表
         let documents_query = format!(
-            "SELECT id, title, slug, excerpt, is_published, created_at, updated_at, sort_order 
+            "SELECT id, title, slug, excerpt, is_public, created_at, updated_at, order_index 
              FROM document 
              WHERE {} 
-             ORDER BY sort_order ASC, created_at DESC 
+             ORDER BY order_index ASC, created_at DESC 
              LIMIT $limit START $offset",
             where_clause
         );
@@ -152,16 +153,25 @@ impl DocumentService {
             }
         }
 
-        let count_results: Vec<serde_json::Value> = count_result
+        let mut count_response = count_result
             .await
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            
+        let count_results: Vec<surrealdb::sql::Value> = count_response
             .take(0)
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
-        let total = count_results
-            .first()
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as u32;
+        // 将 surrealdb::sql::Value 转换为 serde_json::Value
+        let total = if let Some(first_result) = count_results.first() {
+            let json_value: serde_json::Value = first_result.clone().try_into()
+                .map_err(|_| ApiError::InternalServerError("Failed to convert count result".to_string()))?;
+            json_value
+                .get("count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32
+        } else {
+            0
+        };
 
         let total_pages = (total + limit - 1) / limit;
 
@@ -199,45 +209,71 @@ impl DocumentService {
         let content = request.content.as_deref().unwrap_or("");
         let processed = self.markdown_processor.process(content).await?;
 
-        let space_thing = Thing::from(("space", space_id));
-        let parent_id_thing = if let Some(parent_id) = &request.parent_id {
-            Some(Thing::from(("document", parent_id.as_str())))
+        // 使用 SurrealQL 创建记录 - 不设置 metadata，让它使用默认值
+        let query = if request.parent_id.is_some() {
+            r#"
+                CREATE document SET
+                    space_id = type::thing('space', $space_id),
+                    title = $title,
+                    slug = $slug,
+                    author_id = $author_id,
+                    content = $content,
+                    excerpt = $excerpt,
+                    word_count = $word_count,
+                    reading_time = $reading_time,
+                    is_public = $is_public,
+                    parent_id = type::thing('document', $parent_id),
+                    order_index = $order_index
+            "#
         } else {
-            None
+            r#"
+                CREATE document SET
+                    space_id = type::thing('space', $space_id),
+                    title = $title,
+                    slug = $slug,
+                    author_id = $author_id,
+                    content = $content,
+                    excerpt = $excerpt,
+                    word_count = $word_count,
+                    reading_time = $reading_time,
+                    is_public = $is_public,
+                    parent_id = NONE,
+                    order_index = $order_index
+            "#
         };
-
-        let mut document = Document::new(
-            space_thing.to_string(),
-            request.title.clone(),
-            request.slug.clone(),
-            author_id.to_string(),
-        );
         
-        // 设置内容
-        document.content = content.to_string();
-
-        if let Some(parent_id) = parent_id_thing {
-            document = document.with_parent(parent_id.to_string());
+        let mut query_builder = self.db.client.query(query);
+        query_builder = query_builder
+            .bind(("space_id", space_id))
+            .bind(("title", request.title.clone()))
+            .bind(("slug", request.slug.clone()))
+            .bind(("author_id", author_id.to_string()))
+            .bind(("content", content.to_string()))
+            .bind(("excerpt", processed.excerpt.clone()))
+            .bind(("word_count", processed.word_count))
+            .bind(("reading_time", processed.reading_time))
+            .bind(("is_public", request.is_public.unwrap_or(false)))
+            .bind(("order_index", request.order_index.unwrap_or(0)));
+            
+        if let Some(parent_id) = &request.parent_id {
+            query_builder = query_builder.bind(("parent_id", parent_id));
         }
-
-        if let Some(excerpt) = request.excerpt {
-            document = document.with_description(excerpt);
-        }
-
-        document.excerpt = Some(processed.excerpt);
-        document.word_count = processed.word_count;
-        document.reading_time = processed.reading_time;
-
-        let created: Vec<Document> = self.db.client
-            .create("document")
-            .content(document.clone())
+        
+        let mut result = query_builder
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            
+        let created: Vec<crate::models::document::DocumentDb> = result
+            .take(0)
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
-        let created_document = created
+        let created_document_db = created
             .into_iter()
             .next()
             .ok_or_else(|| ApiError::InternalServerError("Failed to create document".to_string()))?;
+        
+        // 转换为普通的 Document
+        let created_document: Document = created_document_db.into();
 
         // 更新搜索索引
         if let Some(search_service) = &self.search_service {
@@ -249,7 +285,7 @@ impl DocumentService {
                 &created_document.excerpt.clone().unwrap_or_default(),
                 Vec::new(), // 标签将在后续更新
                 author_id,
-                created_document.is_published,
+                created_document.is_public,
             ).await;
         }
 
@@ -307,8 +343,8 @@ impl DocumentService {
             document.excerpt = Some(excerpt);
         }
 
-        if let Some(is_published) = request.is_published {
-            document.is_published = is_published;
+        if let Some(is_public) = request.is_public {
+            document.is_public = is_public;
         }
 
         document.updated_by = Some(editor_id.to_string());
@@ -333,7 +369,7 @@ impl DocumentService {
                 &updated_document.excerpt.clone().unwrap_or_default(),
                 Vec::new(), // 标签将在后续更新
                 &updated_document.author_id,
-                updated_document.is_published,
+                updated_document.is_public,
             ).await;
         }
 
@@ -412,7 +448,7 @@ impl DocumentService {
             SELECT * FROM document 
             WHERE parent_id = $parent_id 
             AND is_deleted = false
-            ORDER BY sort_order ASC, created_at ASC
+            ORDER BY order_index ASC, created_at ASC
         ";
 
         let children: Vec<Document> = self.db.client
@@ -432,7 +468,7 @@ impl DocumentService {
             SELECT * FROM document 
             WHERE space_id = $space_id 
             AND is_deleted = false
-            ORDER BY sort_order ASC, created_at ASC
+            ORDER BY order_index ASC, created_at ASC
         ";
 
         let all_documents: Vec<Document> = self.db.client
@@ -453,8 +489,8 @@ impl DocumentService {
                     id: doc_id.clone(),
                     title: doc.title.clone(),
                     slug: doc.slug.clone(),
-                    is_published: doc.is_published,
-                    sort_order: doc.sort_order,
+                    is_public: doc.is_public,
+                    order_index: doc.order_index,
                     children: Vec::new(),
                 };
                 
@@ -478,8 +514,8 @@ impl DocumentService {
                             id: parent_id_thing.to_string(),
                             title: "Unknown".to_string(),
                             slug: "unknown".to_string(),
-                            is_published: false,
-                            sort_order: 0,
+                            is_public: false,
+                            order_index: 0,
                             children: Vec::new(),
                         })
                         .children.push(node);
@@ -515,7 +551,7 @@ impl DocumentService {
         }
 
         if let Some(order_index) = new_order_index {
-            document.sort_order = order_index;
+            document.order_index = order_index;
         }
 
         document.updated_by = Some(mover_id.to_string());
@@ -572,7 +608,7 @@ impl DocumentService {
         new_document.excerpt = original.excerpt.clone();
         new_document.word_count = original.word_count;
         new_document.reading_time = original.reading_time;
-        new_document.is_published = original.is_published;
+        new_document.is_public = original.is_public;
 
         let created: Vec<Document> = self.db.client
             .create("document")
@@ -595,7 +631,7 @@ impl DocumentService {
                 &created_document.excerpt.clone().unwrap_or_default(),
                 Vec::new(),
                 duplicator_id,
-                created_document.is_published,
+                created_document.is_public,
             ).await;
         }
 

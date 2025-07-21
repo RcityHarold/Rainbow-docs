@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use validator::Validate;
+use surrealdb::sql::Thing;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
@@ -11,9 +12,9 @@ pub struct Document {
     pub slug: String,
     pub content: String,
     pub excerpt: Option<String>,
-    pub is_published: bool,
+    pub is_public: bool,
     pub parent_id: Option<String>,
-    pub sort_order: i32,
+    pub order_index: i32,
     pub author_id: String,
     pub last_editor_id: Option<String>,
     pub view_count: u32,
@@ -30,8 +31,11 @@ pub struct Document {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentMetadata {
+    #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
     pub custom_fields: HashMap<String, serde_json::Value>,
+    #[serde(default)]
     pub seo: SeoMetadata,
     pub reading_time: Option<u32>, // in minutes
 }
@@ -40,6 +44,7 @@ pub struct DocumentMetadata {
 pub struct SeoMetadata {
     pub title: Option<String>,
     pub description: Option<String>,
+    #[serde(default)]
     pub keywords: Vec<String>,
     pub og_image: Option<String>,
 }
@@ -77,9 +82,9 @@ pub struct CreateDocumentRequest {
     
     pub content: Option<String>,
     pub excerpt: Option<String>,
-    pub is_published: Option<bool>,
+    pub is_public: Option<bool>,
     pub parent_id: Option<String>,
-    pub sort_order: Option<i32>,
+    pub order_index: Option<i32>,
     pub metadata: Option<DocumentMetadata>,
 }
 
@@ -90,9 +95,9 @@ pub struct UpdateDocumentRequest {
     
     pub content: Option<String>,
     pub excerpt: Option<String>,
-    pub is_published: Option<bool>,
+    pub is_public: Option<bool>,
     pub parent_id: Option<String>,
-    pub sort_order: Option<i32>,
+    pub order_index: Option<i32>,
     pub metadata: Option<DocumentMetadata>,
 }
 
@@ -104,9 +109,9 @@ pub struct DocumentResponse {
     pub slug: String,
     pub content: String,
     pub excerpt: Option<String>,
-    pub is_published: bool,
+    pub is_public: bool,
     pub parent_id: Option<String>,
-    pub sort_order: i32,
+    pub order_index: i32,
     pub author_id: String,
     pub last_editor_id: Option<String>,
     pub view_count: u32,
@@ -124,9 +129,9 @@ pub struct DocumentListItem {
     pub title: String,
     pub slug: String,
     pub excerpt: Option<String>,
-    pub is_published: bool,
+    pub is_public: bool,
     pub parent_id: Option<String>,
-    pub sort_order: i32,
+    pub order_index: i32,
     pub author_id: String,
     pub view_count: u32,
     pub created_at: DateTime<Utc>,
@@ -157,10 +162,10 @@ pub struct DocumentQuery {
     pub limit: Option<u32>,
     pub search: Option<String>,
     pub parent_id: Option<String>,
-    pub is_published: Option<bool>,
+    pub is_public: Option<bool>,
     pub author_id: Option<String>,
     pub tags: Option<Vec<String>>,
-    pub sort: Option<String>, // "title", "created_at", "updated_at", "sort_order"
+    pub sort: Option<String>, // "title", "created_at", "updated_at", "order_index"
     pub order: Option<String>, // "asc", "desc"
 }
 
@@ -171,10 +176,10 @@ impl Default for DocumentQuery {
             limit: Some(20),
             search: None,
             parent_id: None,
-            is_published: None,
+            is_public: None,
             author_id: None,
             tags: None,
-            sort: Some("sort_order".to_string()),
+            sort: Some("order_index".to_string()),
             order: Some("asc".to_string()),
         }
     }
@@ -185,8 +190,8 @@ pub struct DocumentTreeNode {
     pub id: String,
     pub title: String,
     pub slug: String,
-    pub is_published: bool,
-    pub sort_order: i32,
+    pub is_public: bool,
+    pub order_index: i32,
     pub children: Vec<DocumentTreeNode>,
 }
 
@@ -209,9 +214,9 @@ impl Document {
             slug,
             content: String::new(),
             excerpt: None,
-            is_published: false,
+            is_public: false,
             parent_id: None,
-            sort_order: 0,
+            order_index: 0,
             author_id,
             last_editor_id: None,
             view_count: 0,
@@ -248,7 +253,7 @@ impl Document {
     }
 
     pub fn can_read(&self, user_id: Option<&str>, is_space_public: bool) -> bool {
-        if !self.is_published {
+        if !self.is_public {
             // 未发布的文档只有作者可以查看
             return match user_id {
                 Some(uid) => self.is_author(uid),
@@ -307,6 +312,61 @@ impl Document {
     }
 }
 
+// 数据库专用结构体，用于处理 Thing 类型
+#[derive(Debug, Clone, Deserialize)]
+pub struct DocumentDb {
+    pub id: Option<Thing>,
+    pub space_id: Thing,
+    pub title: String,
+    pub slug: String,
+    pub content: String,
+    pub excerpt: Option<String>,
+    pub is_public: bool,
+    pub parent_id: Option<Thing>,
+    pub order_index: i32,
+    pub author_id: String,
+    pub last_editor_id: Option<String>,
+    pub view_count: u32,
+    pub word_count: u32,
+    pub reading_time: u32,
+    #[serde(default)]
+    pub metadata: DocumentMetadata,
+    pub updated_by: Option<String>,
+    pub is_deleted: bool,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_by: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+impl From<DocumentDb> for Document {
+    fn from(db: DocumentDb) -> Self {
+        Self {
+            id: db.id.map(|thing| thing.to_string()),
+            space_id: db.space_id.to_string(),
+            title: db.title,
+            slug: db.slug,
+            content: db.content,
+            excerpt: db.excerpt,
+            is_public: db.is_public,
+            parent_id: db.parent_id.map(|thing| thing.to_string()),
+            order_index: db.order_index,
+            author_id: db.author_id,
+            last_editor_id: db.last_editor_id,
+            view_count: db.view_count,
+            word_count: db.word_count,
+            reading_time: db.reading_time,
+            metadata: db.metadata,
+            updated_by: db.updated_by,
+            is_deleted: db.is_deleted,
+            deleted_at: db.deleted_at,
+            deleted_by: db.deleted_by,
+            created_at: db.created_at,
+            updated_at: db.updated_at,
+        }
+    }
+}
+
 impl From<Document> for DocumentResponse {
     fn from(doc: Document) -> Self {
         Self {
@@ -316,9 +376,9 @@ impl From<Document> for DocumentResponse {
             slug: doc.slug,
             content: doc.content,
             excerpt: doc.excerpt,
-            is_published: doc.is_published,
+            is_public: doc.is_public,
             parent_id: doc.parent_id,
-            sort_order: doc.sort_order,
+            order_index: doc.order_index,
             author_id: doc.author_id,
             last_editor_id: doc.last_editor_id,
             view_count: doc.view_count,
@@ -339,9 +399,9 @@ impl From<Document> for DocumentListItem {
             title: doc.title,
             slug: doc.slug,
             excerpt: doc.excerpt,
-            is_published: doc.is_published,
+            is_public: doc.is_public,
             parent_id: doc.parent_id,
-            sort_order: doc.sort_order,
+            order_index: doc.order_index,
             author_id: doc.author_id,
             view_count: doc.view_count,
             created_at: doc.created_at.unwrap_or_else(Utc::now),
@@ -369,7 +429,7 @@ mod tests {
         assert_eq!(doc.slug, "test-document");
         assert_eq!(doc.space_id, "space_123");
         assert_eq!(doc.author_id, "user_123");
-        assert!(!doc.is_published);
+        assert!(!doc.is_public);
     }
 
     #[test]
@@ -424,7 +484,7 @@ mod tests {
         assert!(!doc.can_read(None, true));
 
         // Published document in public space - anyone can read
-        doc.is_published = true;
+        doc.is_public = true;
         assert!(doc.can_read(Some("user_123"), true));
         assert!(doc.can_read(Some("user_456"), true));
         assert!(doc.can_read(None, true));

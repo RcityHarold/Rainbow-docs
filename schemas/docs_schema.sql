@@ -38,27 +38,27 @@ DEFINE FIELD space_id ON document TYPE record(space) ASSERT $value != NONE;
 DEFINE FIELD title ON document TYPE string ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 255;
 DEFINE FIELD slug ON document TYPE string ASSERT $value != NONE AND string::len($value) > 0 AND string::len($value) <= 100;
 DEFINE FIELD content ON document TYPE string DEFAULT "";
-DEFINE FIELD excerpt ON document TYPE string;
-DEFINE FIELD description ON document TYPE string;
+DEFINE FIELD excerpt ON document TYPE option<string>;
+DEFINE FIELD description ON document TYPE option<string>;
 DEFINE FIELD is_public ON document TYPE bool DEFAULT false;
 DEFINE FIELD is_deleted ON document TYPE bool DEFAULT false;
 DEFINE FIELD parent_id ON document TYPE option<record(document)>;
 DEFINE FIELD order_index ON document TYPE number DEFAULT 0;
 DEFINE FIELD depth_level ON document TYPE number DEFAULT 0;
 DEFINE FIELD author_id ON document TYPE string ASSERT $value != NONE;
-DEFINE FIELD updated_by ON document TYPE string;
-DEFINE FIELD deleted_by ON document TYPE string;
+DEFINE FIELD updated_by ON document TYPE option<string>;
+DEFINE FIELD deleted_by ON document TYPE option<string>;
 DEFINE FIELD view_count ON document TYPE number DEFAULT 0;
 DEFINE FIELD word_count ON document TYPE number DEFAULT 0;
 DEFINE FIELD reading_time ON document TYPE number DEFAULT 0; -- 阅读时间(分钟)
-DEFINE FIELD cover_image ON document TYPE string;
+DEFINE FIELD cover_image ON document TYPE option<string>;
 DEFINE FIELD status ON document TYPE string DEFAULT "draft" ASSERT $value INSIDE ["draft", "published", "archived"];
 DEFINE FIELD template_id ON document TYPE option<record(document)>; -- 模板文档ID
 DEFINE FIELD metadata ON document TYPE object DEFAULT {};
 DEFINE FIELD created_at ON document TYPE datetime DEFAULT time::now();
 DEFINE FIELD updated_at ON document TYPE datetime DEFAULT time::now();
-DEFINE FIELD deleted_at ON document TYPE datetime;
-DEFINE FIELD published_at ON document TYPE datetime;
+DEFINE FIELD deleted_at ON document TYPE option<datetime>;
+DEFINE FIELD published_at ON document TYPE option<datetime>;
 
 -- 文档索引
 DEFINE INDEX document_space_slug_idx ON document COLUMNS space_id, slug UNIQUE;

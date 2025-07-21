@@ -179,10 +179,23 @@ impl MarkdownProcessor {
         if plain_text.len() <= max_length {
             plain_text
         } else {
-            // 在单词边界截断
-            let truncated = &plain_text[..max_length];
-            if let Some(last_space) = truncated.rfind(' ') {
-                format!("{}...", &truncated[..last_space])
+            // 使用字符边界安全截断
+            let mut end = max_length;
+            
+            // 确保不会在字符中间截断
+            while !plain_text.is_char_boundary(end) && end > 0 {
+                end -= 1;
+            }
+            
+            if end == 0 {
+                return String::new();
+            }
+            
+            let truncated = &plain_text[..end];
+            
+            // 尝试在单词或中文字符边界截断
+            if let Some(last_space) = truncated.rfind(|c: char| c.is_whitespace() || c == '。' || c == '，' || c == '！' || c == '？') {
+                format!("{}...", &truncated[..=last_space].trim())
             } else {
                 format!("{}...", truncated)
             }

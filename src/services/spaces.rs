@@ -332,7 +332,7 @@ impl SpaceService {
 
         // 查询公开文档数量
         let public_doc_count: Option<u32> = self.db.client
-            .query("SELECT count() FROM document WHERE space_id = $space_id AND is_published = true")
+            .query("SELECT count() FROM document WHERE space_id = $space_id AND is_public = true")
             .bind(("space_id", format!("space:{}", space_id)))
             .await
             .map_err(|e| AppError::Database(e))?
