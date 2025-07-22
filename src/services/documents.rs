@@ -47,41 +47,20 @@ impl DocumentService {
 
     pub async fn list_documents(
         &self,
-        space_slug: &str,
+        space_id: &str,
         query: crate::models::document::DocumentQuery,
-        user: Option<&crate::services::auth::User>,
+        _user: Option<&crate::services::auth::User>,
     ) -> Result<serde_json::Value, ApiError> {
         use crate::models::document::{DocumentQuery, DocumentListItem, DocumentListResponse};
         
-        // 首先根据slug获取space_id
-        let space_query = "SELECT id FROM space WHERE slug = $slug AND is_deleted = false";
-        let mut space_result = self.db.client
-            .query(space_query)
-            .bind(("slug", space_slug))
-            .await
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
-        
-        let spaces: Vec<serde_json::Value> = space_result
-            .take(0)
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
-        
-        let space = spaces.first().ok_or_else(|| {
-            ApiError::NotFound("Space not found".to_string())
-        })?;
-        
-        let space_id = space.get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("Invalid space ID")))?
-            .split(':')
-            .nth(1)
-            .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("Invalid space ID format")))?;
+        // 提取实际的空间ID（去掉"space:"前缀，如果存在）
+        let actual_space_id = if space_id.starts_with("space:") {
+            space_id.strip_prefix("space:").unwrap()
+        } else {
+            space_id
+        };
 
-        // 检查权限
-        if let Some(user) = user {
-            self.auth_service
-                .check_permission(&user.id, "docs.read", Some(space_id))
-                .await?;
-        }
+        // 注意：权限检查已经在路由层完成，这里不再重复检查
 
         // 构建查询条件
         let page = query.page.unwrap_or(1);
@@ -94,7 +73,7 @@ impl DocumentService {
         ];
 
         let mut bindings = vec![
-            ("space_id", serde_json::Value::String(format!("space:{}", space_id))),
+            ("space_id", serde_json::Value::String(format!("space:{}", actual_space_id))),
             ("limit", serde_json::Value::Number(limit.into())),
             ("offset", serde_json::Value::Number(offset.into()))
         ];
@@ -119,15 +98,20 @@ impl DocumentService {
 
         let where_clause = where_conditions.join(" AND ");
 
-        // 查询文档列表
+        // 查询文档列表 - tags字段暂时使用空数组，children_count暂时设为0
         let documents_query = format!(
-            "SELECT id, title, slug, excerpt, is_public, created_at, updated_at, order_index 
+            "SELECT id, title, slug, excerpt, is_public, parent_id, order_index, author_id, 
+                    view_count, created_at, updated_at, [] as tags, 0 as children_count
              FROM document 
              WHERE {} 
              ORDER BY order_index ASC, created_at DESC 
              LIMIT $limit START $offset",
             where_clause
         );
+
+        // Debug logging - remove in production
+        // tracing::debug!("Document query: {}", documents_query);
+        // tracing::debug!("Query bindings: {:?}", bindings);
 
         let mut documents_result = self.db.client.query(&documents_query);
         for (key, value) in &bindings {
@@ -139,6 +123,8 @@ impl DocumentService {
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?
             .take(0)
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        // tracing::debug!("Found {} documents", documents.len());
 
         // 查询总数
         let count_query = format!(
@@ -242,9 +228,16 @@ impl DocumentService {
             "#
         };
         
+        // 提取space_id的实际ID部分（去掉"space:"前缀）
+        let actual_space_id = if space_id.starts_with("space:") {
+            space_id.strip_prefix("space:").unwrap()
+        } else {
+            space_id
+        };
+
         let mut query_builder = self.db.client.query(query);
         query_builder = query_builder
-            .bind(("space_id", space_id))
+            .bind(("space_id", actual_space_id))
             .bind(("title", request.title.clone()))
             .bind(("slug", request.slug.clone()))
             .bind(("author_id", author_id.to_string()))
@@ -451,7 +444,7 @@ impl DocumentService {
             ORDER BY order_index ASC, created_at ASC
         ";
 
-        let children: Vec<Document> = self.db.client
+        let children_db: Vec<crate::models::document::DocumentDb> = self.db.client
             .query(query)
             .bind(("parent_id", Thing::from(("document", parent_id))))
             .await
@@ -459,10 +452,37 @@ impl DocumentService {
             .take(0)
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
+        let children: Vec<Document> = children_db.into_iter()
+            .map(|db| db.into())
+            .collect();
+
         Ok(children)
     }
 
+    pub async fn get_document_children_by_id(
+        &self,
+        parent_id: &str,
+    ) -> Result<Vec<Document>, ApiError> {
+        // 分离前缀和实际ID
+        let actual_id = if parent_id.starts_with("document:") {
+            parent_id.strip_prefix("document:").unwrap()
+        } else {
+            parent_id
+        };
+        
+        self.get_document_children(actual_id).await
+    }
+
     pub async fn get_document_tree(&self, space_id: &str) -> Result<Vec<DocumentTreeNode>, ApiError> {
+        tracing::debug!("Getting document tree for space_id: {}", space_id);
+        
+        // 提取实际的空间ID（去掉"space:"前缀，如果存在）
+        let actual_space_id = if space_id.starts_with("space:") {
+            space_id.strip_prefix("space:").unwrap()
+        } else {
+            space_id
+        };
+        
         // 获取空间内所有文档
         let query = "
             SELECT * FROM document 
@@ -471,13 +491,25 @@ impl DocumentService {
             ORDER BY order_index ASC, created_at ASC
         ";
 
-        let all_documents: Vec<Document> = self.db.client
+        let space_thing = Thing::from(("space", actual_space_id));
+        tracing::debug!("Querying with space_thing: {:?}", space_thing);
+        
+        let all_documents_db: Vec<crate::models::document::DocumentDb> = self.db.client
             .query(query)
-            .bind(("space_id", Thing::from(("space", space_id))))
+            .bind(("space_id", space_thing))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?
             .take(0)
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            
+        tracing::debug!("Found {} documents in database", all_documents_db.len());
+            
+        // 转换为 Document
+        let all_documents: Vec<Document> = all_documents_db.into_iter()
+            .map(|db| db.into())
+            .collect();
+            
+        tracing::debug!("Converted to {} Document objects", all_documents.len());
 
         // 构建文档映射
         let mut doc_map = std::collections::HashMap::new();
@@ -531,6 +563,7 @@ impl DocumentService {
             }
         }
 
+        tracing::debug!("Returning {} root documents in tree", result.len());
         Ok(result)
     }
 
@@ -573,6 +606,34 @@ impl DocumentService {
         while let Some(id) = current_id {
             let document = self.get_document(&id).await?;
             current_id = document.parent_id.as_ref().map(|p| p.to_string());
+            breadcrumbs.push(document);
+        }
+
+        breadcrumbs.reverse();
+        Ok(breadcrumbs)
+    }
+
+    pub async fn get_document_breadcrumbs_by_id(&self, document_id: &str) -> Result<Vec<Document>, ApiError> {
+        // 分离前缀和实际ID
+        let actual_id = if document_id.starts_with("document:") {
+            document_id.strip_prefix("document:").unwrap()
+        } else {
+            document_id
+        };
+        
+        let mut breadcrumbs = Vec::new();
+        let mut current_id = Some(actual_id.to_string());
+
+        while let Some(id) = current_id {
+            let document = self.get_document_by_id(&format!("document:{}", id)).await?;
+            // 从parent_id中提取实际ID
+            current_id = document.parent_id.as_ref().map(|p| {
+                if p.starts_with("document:") {
+                    p.strip_prefix("document:").unwrap().to_string()
+                } else {
+                    p.clone()
+                }
+            });
             breadcrumbs.push(document);
         }
 
@@ -660,6 +721,46 @@ impl DocumentService {
         documents.into_iter()
             .next()
             .ok_or_else(|| ApiError::NotFound("Document not found".to_string()))
+    }
+
+    pub async fn get_document_by_id(&self, id: &str) -> Result<Document, ApiError> {
+        // 添加调试日志
+        tracing::info!("Searching for document with ID: '{}'", id);
+        
+        // 分离前缀和实际ID
+        let actual_id = if id.starts_with("document:") {
+            id.strip_prefix("document:").unwrap()
+        } else {
+            id
+        };
+        
+        tracing::info!("Using actual_id for Thing: '{}'", actual_id);
+
+        let query = "
+            SELECT * FROM document 
+            WHERE id = $id 
+            AND is_deleted = false
+        ";
+
+        let mut result = self.db.client
+            .query(query)
+            .bind(("id", Thing::from(("document", actual_id))))
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        let documents_db: Vec<crate::models::document::DocumentDb> = result
+            .take(0)
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+
+        tracing::info!("Found {} documents from database", documents_db.len());
+
+        let document_db = documents_db.into_iter()
+            .next()
+            .ok_or_else(|| ApiError::NotFound("Document not found".to_string()))?;
+        
+        // 转换为普通的 Document
+        let document: Document = document_db.into();
+        Ok(document)
     }
 
     async fn document_slug_exists(&self, space_id: &str, slug: &str) -> Result<bool, ApiError> {

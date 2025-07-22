@@ -5,5 +5,6 @@ pub mod documents;
 pub mod file_upload;
 pub mod search;
 pub mod spaces;
+pub mod space_member;
 pub mod tags;
 pub mod versions;

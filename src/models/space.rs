@@ -254,12 +254,15 @@ impl Space {
             None => false,
         }
     }
+
+    // 注意：这个方法现在仅检查基础权限（公开性和所有者）
+    // 对于成员权限检查，请使用 SpaceMemberService::can_access_space
 }
 
 impl From<SpaceDb> for Space {
     fn from(db: SpaceDb) -> Self {
         Self {
-            id: db.id.map(|thing| thing.id.to_string()),
+            id: db.id.map(|thing| thing.to_string()),
             name: db.name,
             slug: db.slug,
             description: db.description,

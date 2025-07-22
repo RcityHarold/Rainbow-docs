@@ -15,6 +15,8 @@ use tracing::{info, warn};
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(list_spaces).post(create_space))
+        .route("/create", post(handle_legacy_create)) // Legacy frontend support
+        .route("/create/stats", get(handle_legacy_create_stats)) // Legacy frontend support
         .route("/:slug", get(get_space).put(update_space).delete(delete_space))
         .route("/:slug/stats", get(get_space_stats))
 }
@@ -128,6 +130,26 @@ async fn get_space_stats(
         "data": stats,
         "message": "Space statistics retrieved successfully"
     })))
+}
+
+/// Legacy handler for frontend calls to /create (should use POST /)
+async fn handle_legacy_create(
+    State(app_state): State<Arc<AppState>>,
+    user: User,
+    Json(request): Json<CreateSpaceRequest>,
+) -> Result<Json<Value>> {
+    // Forward to the correct create_space handler
+    create_space(State(app_state), user, Json(request)).await
+}
+
+/// Legacy handler for frontend calls to /create/stats
+async fn handle_legacy_create_stats(
+    State(_app_state): State<Arc<AppState>>,
+    OptionalUser(_user): OptionalUser,
+) -> Result<Json<Value>> {
+    Err(AppError::BadRequest(
+        "Invalid endpoint. Please use '/api/docs/spaces/{slug}/stats' instead.".to_string()
+    ))
 }
 
 #[cfg(test)]

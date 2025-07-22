@@ -26,9 +26,9 @@ impl SpaceService {
         // 验证输入
         request.validate().map_err(|e| AppError::Validation(e.to_string()))?;
 
-        // 检查slug是否已存在
+        // 检查slug是否已存在（全局唯一）
         if self.slug_exists(&request.slug).await? {
-            return Err(AppError::Conflict("Space slug already exists".to_string()));
+            return Err(AppError::Conflict("Space slug already exists globally. Please choose a different slug.".to_string()));
         }
 
         // 创建空间对象
@@ -55,7 +55,7 @@ impl SpaceService {
         }
 
         // 保存到数据库
-        let created_spaces: Vec<Space> = self.db.client
+        let created_spaces_db: Vec<crate::models::space::SpaceDb> = self.db.client
             .create("space")
             .content(&space)
             .await
@@ -64,12 +64,15 @@ impl SpaceService {
                 AppError::Database(e)
             })?;
 
-        let created_space = created_spaces.into_iter().next();
+        let created_space_db = created_spaces_db.into_iter().next();
 
-        let created_space = created_space.ok_or_else(|| {
+        let created_space_db = created_space_db.ok_or_else(|| {
             error!("Failed to get created space from database");
             AppError::Internal(anyhow::anyhow!("Failed to create space"))
         })?;
+
+        // 转换为 Space 类型
+        let created_space: Space = created_space_db.into();
 
         info!("Created new space: {} by user: {}", request.slug, user.id);
 
@@ -89,13 +92,16 @@ impl SpaceService {
         let mut where_conditions = Vec::new();
         let mut params: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
 
-        // 权限过滤：只显示公开空间或用户拥有的空间
+        // 权限过滤：显示公开空间或用户拥有的空间
         if let Some(user) = user {
             where_conditions.push("(is_public = true OR owner_id = $user_id)");
             params.insert("user_id".to_string(), user.id.clone().into());
         } else {
             where_conditions.push("is_public = true");
         }
+
+        // 基础过滤条件
+        where_conditions.push("is_deleted = false");
 
         // 搜索过滤
         if let Some(search) = &query.search {
@@ -127,15 +133,18 @@ impl SpaceService {
         let order_clause = format!("ORDER BY {} {}", sort_field, sort_order);
 
         // 查询总数
-        let count_query = format!("SELECT count() FROM space {}", where_clause);
-        let total: Option<u32> = self.db.client
+        let count_query = format!("SELECT count() AS total FROM space {} GROUP ALL", where_clause);
+        let count_result: Vec<serde_json::Value> = self.db.client
             .query(&count_query)
             .bind(params.clone())
             .await
             .map_err(|e| AppError::Database(e))?
-            .take((0, "count"))?;
-
-        let total = total.unwrap_or(0);
+            .take(0)?;
+            
+        let total = count_result.first()
+            .and_then(|v| v.get("total"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
         let total_pages = (total + limit - 1) / limit;
 
         // 查询数据
@@ -153,9 +162,26 @@ impl SpaceService {
             .take(0)?;
         
         // 转换为 Space 类型
-        let spaces: Vec<Space> = spaces_db.into_iter()
+        let mut spaces: Vec<Space> = spaces_db.into_iter()
             .map(|db| db.into())
             .collect();
+
+        // 如果是登录用户，还需要添加用户作为成员的空间
+        if let Some(user) = user {
+            let member_spaces = self.get_user_member_spaces(&user.id).await?;
+            // 合并空间，避免重复
+            let existing_ids: std::collections::HashSet<String> = spaces.iter()
+                .filter_map(|s| s.id.clone())
+                .collect();
+            
+            for member_space in member_spaces {
+                if let Some(space_id) = &member_space.id {
+                    if !existing_ids.contains(space_id) {
+                        spaces.push(member_space);
+                    }
+                }
+            }
+        }
 
         // 转换为响应格式
         let mut space_responses = Vec::new();
@@ -182,7 +208,7 @@ impl SpaceService {
     /// 根据slug获取空间详情
     pub async fn get_space_by_slug(&self, slug: &str, user: Option<&User>) -> Result<SpaceResponse> {
         let space_db: Option<crate::models::space::SpaceDb> = self.db.client
-            .query("SELECT * FROM space WHERE slug = $slug")
+            .query("SELECT * FROM space WHERE slug = $slug AND is_deleted = false")
             .bind(("slug", slug))
             .await
             .map_err(|e| AppError::Database(e))?
@@ -191,8 +217,10 @@ impl SpaceService {
         let space_db = space_db.ok_or_else(|| AppError::NotFound("Space not found".to_string()))?;
         let space: Space = space_db.into();
 
-        // 检查访问权限
+        // 检查基础访问权限（公开性和所有者）
         if !space.can_access(user.map(|u| u.id.as_str())) {
+            // 注意：这里应该集成SpaceMemberService的权限检查
+            // 但为了避免循环依赖，建议在调用方进行额外的成员权限检查
             return Err(AppError::Authorization("Access denied to this space".to_string()));
         }
 
@@ -204,6 +232,37 @@ impl SpaceService {
         }
 
         debug!("Retrieved space: {} for user: {:?}", slug, user.map(|u| &u.id));
+
+        Ok(response)
+    }
+
+    /// 根据ID获取空间详情
+    pub async fn get_space_by_id(&self, id: &str, user: Option<&User>) -> Result<SpaceResponse> {
+        let space_db: Option<crate::models::space::SpaceDb> = self.db.client
+            .query("SELECT * FROM space WHERE id = $id AND is_deleted = false")
+            .bind(("id", format!("space:{}", id)))
+            .await
+            .map_err(|e| AppError::Database(e))?
+            .take(0)?;
+
+        let space_db = space_db.ok_or_else(|| AppError::NotFound("Space not found".to_string()))?;
+        let space: Space = space_db.into();
+
+        // 检查基础访问权限（公开性和所有者）
+        if !space.can_access(user.map(|u| u.id.as_str())) {
+            // 注意：这里应该集成SpaceMemberService的权限检查
+            // 但为了避免循环依赖，建议在调用方进行额外的成员权限检查
+            return Err(AppError::Authorization("Access denied to this space".to_string()));
+        }
+
+        let mut response = SpaceResponse::from(space);
+        
+        // 获取统计信息
+        if let Ok(stats) = self.get_space_stats(&response.id).await {
+            response.stats = Some(stats);
+        }
+
+        debug!("Retrieved space by ID: {} for user: {:?}", id, user.map(|u| &u.id));
 
         Ok(response)
     }
@@ -308,10 +367,10 @@ impl SpaceService {
         Ok(())
     }
 
-    /// 检查slug是否已存在
+    /// 检查slug是否已存在（全局检查）
     async fn slug_exists(&self, slug: &str) -> Result<bool> {
         let existing: Option<crate::models::space::SpaceDb> = self.db.client
-            .query("SELECT id FROM space WHERE slug = $slug LIMIT 1")
+            .query("SELECT id FROM space WHERE slug = $slug AND is_deleted = false LIMIT 1")
             .bind(("slug", slug))
             .await
             .map_err(|e| AppError::Database(e))?
@@ -398,6 +457,51 @@ impl SpaceService {
             .and_then(|mut result| result.pop());
 
         Ok(())
+    }
+
+    /// 获取用户作为成员的空间
+    async fn get_user_member_spaces(&self, user_id: &str) -> Result<Vec<Space>> {
+        let member_query = "
+            SELECT space_id FROM space_member 
+            WHERE user_id = $user_id 
+            AND status = 'accepted'
+        ";
+
+        let member_results: Vec<serde_json::Value> = self.db.client
+            .query(member_query)
+            .bind(("user_id", user_id))
+            .await
+            .map_err(|e| AppError::Database(e))?
+            .take(0)?;
+
+        // 获取空间ID列表
+        let space_ids: Vec<String> = member_results.iter()
+            .filter_map(|result| {
+                result.get("space_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+
+        if space_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 查询这些空间的详细信息
+        let mut spaces = Vec::new();
+        for space_id in space_ids {
+            if let Ok(Some(space_db)) = self.db.client
+                .query("SELECT * FROM space WHERE id = $space_id AND is_deleted = false")
+                .bind(("space_id", space_id))
+                .await
+                .map_err(|e| AppError::Database(e))
+                .and_then(|mut result| result.take::<Option<crate::models::space::SpaceDb>>(0).map_err(|e| AppError::Database(e)))
+            {
+                spaces.push(space_db.into());
+            }
+        }
+
+        Ok(spaces)
     }
 }
 

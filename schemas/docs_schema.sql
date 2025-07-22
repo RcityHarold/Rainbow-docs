@@ -25,8 +25,10 @@ DEFINE FIELD updated_at ON space TYPE datetime DEFAULT time::now();
 DEFINE FIELD created_by ON space TYPE option<string>;
 DEFINE FIELD updated_by ON space TYPE option<string>;
 
--- 空间索引
-DEFINE INDEX space_slug_idx ON space COLUMNS slug UNIQUE;
+-- 空间索引 - slug全局唯一（类似GitHub仓库名）
+DEFINE INDEX space_slug_unique_idx ON space COLUMNS slug UNIQUE;
+-- 保留owner索引用于查询
+DEFINE INDEX space_owner_slug_idx ON space COLUMNS owner_id, slug;
 DEFINE INDEX space_owner_idx ON space COLUMNS owner_id;
 DEFINE INDEX space_public_idx ON space COLUMNS is_public;
 DEFINE INDEX space_deleted_idx ON space COLUMNS is_deleted;

@@ -1,4 +1,5 @@
 pub mod space;
+pub mod space_member;
 pub mod document;
 pub mod comment;
 pub mod version;

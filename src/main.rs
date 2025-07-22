@@ -21,6 +21,7 @@ use crate::{
         database::Database,
         auth::AuthService,
         spaces::SpaceService,
+        space_member::SpaceMemberService,
         documents::DocumentService,
         comments::CommentService,
         search::SearchService,
@@ -37,6 +38,7 @@ pub struct AppState {
     pub config: Config,
     pub auth_service: Arc<AuthService>,
     pub space_service: Arc<SpaceService>,
+    pub space_member_service: Arc<SpaceMemberService>,
     pub file_upload_service: Arc<FileUploadService>,
     pub tag_service: Arc<TagService>,
     pub document_service: Arc<DocumentService>,
@@ -85,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 创建业务服务
     let space_service = Arc::new(SpaceService::new(shared_db.clone()));
+    let space_member_service = Arc::new(SpaceMemberService::new(shared_db.clone()));
     let file_upload_service = Arc::new(FileUploadService::new(shared_db.clone(), auth_service.clone()));
     let tag_service = Arc::new(TagService::new(shared_db.clone(), auth_service.clone()));
     
@@ -114,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         auth_service: auth_service.clone(),
         space_service: space_service.clone(),
+        space_member_service: space_member_service.clone(),
         file_upload_service: file_upload_service.clone(),
         tag_service: tag_service.clone(),
         document_service: document_service.clone(),
@@ -123,8 +127,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // 创建路由
-    let app = Router::new()
+    let mut app = Router::new()
         .nest("/api/docs/spaces", routes::spaces::router())
+        .nest("/api/docs/spaces", routes::space_members::router())
         .nest("/api/docs/files", routes::files::router())
         .nest("/api/docs/tags", routes::tags::router())
         .nest("/api/docs/documents", routes::documents::router())
@@ -132,8 +137,14 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/docs/search", routes::search::router())
         .nest("/api/docs/stats", routes::stats::router())
         .nest("/api/docs/versions", routes::versions::router())
-        .nest("/api/install", routes::installer::installer_routes().with_state(()))
-        .with_state(Arc::new(app_state))
+        .with_state(Arc::new(app_state));
+
+    #[cfg(feature = "installer")]
+    {
+        app = app.nest("/api/install", routes::installer::installer_routes().with_state(()));
+    }
+
+    let app = app
         .layer(Extension(shared_db))
         .layer(Extension(config.clone()))
         .layer(Extension(auth_service.clone()))
