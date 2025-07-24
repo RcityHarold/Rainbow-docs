@@ -8,3 +8,4 @@ pub mod spaces;
 pub mod space_member;
 pub mod tags;
 pub mod versions;
+pub mod notification;

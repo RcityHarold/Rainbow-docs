@@ -34,7 +34,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Database,
+    pub db: Arc<Database>,
     pub config: Config,
     pub auth_service: Arc<AuthService>,
     pub space_service: Arc<SpaceService>,
@@ -87,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 创建业务服务
     let space_service = Arc::new(SpaceService::new(shared_db.clone()));
-    let space_member_service = Arc::new(SpaceMemberService::new(shared_db.clone()));
+    let space_member_service = Arc::new(SpaceMemberService::new(shared_db.clone(), config.clone()));
     let file_upload_service = Arc::new(FileUploadService::new(shared_db.clone(), auth_service.clone()));
     let tag_service = Arc::new(TagService::new(shared_db.clone(), auth_service.clone()));
     
@@ -113,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 创建 app state
     let app_state = AppState {
-        db,
+        db: shared_db.clone(),
         config: config.clone(),
         auth_service: auth_service.clone(),
         space_service: space_service.clone(),
@@ -134,6 +134,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/docs/tags", routes::tags::router())
         .nest("/api/docs/documents", routes::documents::router())
         .nest("/api/docs/comments", routes::comments::router())
+        .nest("/api/docs/notifications", routes::notifications::router())
         .nest("/api/docs/search", routes::search::router())
         .nest("/api/docs/stats", routes::stats::router())
         .nest("/api/docs/versions", routes::versions::router())

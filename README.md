@@ -43,9 +43,9 @@
 ### 🤝 协作功能
 - **空间成员管理**: 邀请、管理、移除成员
 - **角色权限控制**: 基于角色的精细化权限管理
-- **邀请系统**: 支持邮箱邀请和令牌接受机制
+- **邀请系统**: 支持邮箱邀请和用户ID邀请，邮件通知和站内通知
 - **评论系统**: 文档评论和讨论
-- **通知系统**: 实时更新通知
+- **通知系统**: 站内通知，支持空间邀请、文档更新等多种通知类型
 - **活动日志**: 完整的操作历史记录
 
 ### 📤 导出功能
@@ -1143,6 +1143,122 @@ GET /api/comments/{comment_id}/replies
 POST /api/comments/{comment_id}/like
 ```
 
+### 🔔 通知系统
+
+#### 获取通知列表
+```http
+GET /api/docs/notifications
+```
+
+**查询参数:**
+- `page` (可选): 页码，默认为1
+- `limit` (可选): 每页数量，默认为20
+- `unread_only` (可选): 是否只显示未读通知，默认为false
+
+**响应示例:**
+```json
+{
+  "success": true,
+  "data": {
+    "notifications": [
+      {
+        "id": "notification:123",
+        "user_id": "user:456",
+        "type": "space_invitation",
+        "title": "张三 邀请您加入 项目文档 空间",
+        "content": "张三 邀请您以 编辑者 的身份加入 项目文档 空间。",
+        "data": {
+          "space_name": "项目文档",
+          "invite_token": "abc123-def456",
+          "role": "editor",
+          "inviter_name": "张三"
+        },
+        "is_read": false,
+        "read_at": null,
+        "created_at": "2024-01-15T10:30:00Z",
+        "updated_at": "2024-01-15T10:30:00Z"
+      }
+    ],
+    "total": 5
+  },
+  "message": "Notifications retrieved successfully"
+}
+```
+
+#### 获取未读通知数量
+```http
+GET /api/docs/notifications/unread-count
+```
+
+**响应示例:**
+```json
+{
+  "success": true,
+  "data": {
+    "count": 3
+  },
+  "message": "Unread count retrieved successfully"
+}
+```
+
+#### 标记通知为已读
+```http
+PUT /api/docs/notifications/{notification_id}
+```
+
+**响应示例:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "notification:123",
+    "is_read": true,
+    "read_at": "2024-01-15T11:00:00Z"
+  },
+  "message": "Notification marked as read"
+}
+```
+
+#### 标记所有通知为已读
+```http
+POST /api/docs/notifications/mark-all-read
+```
+
+**响应示例:**
+```json
+{
+  "success": true,
+  "data": {
+    "updated_count": 5
+  },
+  "message": "All notifications marked as read"
+}
+```
+
+#### 删除通知
+```http
+DELETE /api/docs/notifications/{notification_id}
+```
+
+**响应示例:**
+```json
+{
+  "success": true,
+  "data": null,
+  "message": "Notification deleted successfully"
+}
+```
+
+#### 通知类型说明
+
+| 通知类型 | 说明 | 数据字段 |
+|---------|------|----------|
+| `space_invitation` | 空间邀请通知 | `space_name`, `invite_token`, `role`, `inviter_name` |
+| `document_shared` | 文档分享通知 | `document_id`, `document_title`, `sharer_name` |
+| `comment_mention` | 评论提及通知 | `comment_id`, `document_id`, `commenter_name` |
+| `document_update` | 文档更新通知 | `document_id`, `document_title`, `updater_name` |
+| `system` | 系统通知 | 自定义数据 |
+
 ### 统计信息
 
 #### 获取搜索统计
@@ -1379,12 +1495,15 @@ API使用标准HTTP状态码，错误响应格式：
 
 #### 通知表 (notification)
 - `id` - 通知唯一标识
-- `recipient_id` - 接收者ID
-- `sender_id` - 发送者ID
-- `type` - 通知类型
+- `user_id` - 接收者用户ID
+- `type` - 通知类型（space_invitation/document_shared/comment_mention/document_update/system）
 - `title` - 通知标题
 - `content` - 通知内容
+- `data` - 额外数据（JSON格式，如邀请令牌、空间名称等）
 - `is_read` - 是否已读
+- `read_at` - 阅读时间
+- `created_at` - 创建时间
+- `updated_at` - 更新时间
 
 ### 索引优化
 

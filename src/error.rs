@@ -43,6 +43,12 @@ pub enum AppError {
 
     #[error("Validation error: {0}")]
     ValidationErrors(#[from] validator::ValidationErrors),
+
+    #[error("Configuration error: {0}")]
+    Configuration(String),
+
+    #[error("External service error: {0}")]
+    External(String),
 }
 
 impl AppError {
@@ -118,6 +124,14 @@ impl IntoResponse for AppError {
             AppError::ValidationErrors(ref e) => {
                 tracing::warn!("Validation errors: {}", e);
                 (StatusCode::BAD_REQUEST, "Validation failed")
+            }
+            AppError::Configuration(ref msg) => {
+                tracing::error!("Configuration error: {}", msg);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Configuration error")
+            }
+            AppError::External(ref msg) => {
+                tracing::error!("External service error: {}", msg);
+                (StatusCode::BAD_GATEWAY, msg.as_str())
             }
         };
 

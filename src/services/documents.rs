@@ -67,97 +67,70 @@ impl DocumentService {
         let limit = query.limit.unwrap_or(20);
         let offset = (page - 1) * limit;
 
-        let mut where_conditions = vec![
-            "space_id = $space_id".to_string(),
-            "is_deleted = false".to_string()
-        ];
+        // 使用Thing类型来查询
+        let space_thing = Thing::from(("space", actual_space_id));
 
-        let mut bindings = vec![
-            ("space_id", serde_json::Value::String(format!("space:{}", actual_space_id))),
-            ("limit", serde_json::Value::Number(limit.into())),
-            ("offset", serde_json::Value::Number(offset.into()))
-        ];
+        // 查询文档列表
+        let mut documents_query = self.db.client.query(
+            "SELECT * FROM document 
+             WHERE space_id = $space_id 
+             AND is_deleted = false 
+             ORDER BY order_index ASC, created_at DESC 
+             LIMIT $limit START $offset"
+        );
+        
+        documents_query = documents_query
+            .bind(("space_id", space_thing.clone()))
+            .bind(("limit", limit))
+            .bind(("offset", offset));
 
         // 添加搜索条件
         if let Some(search) = &query.search {
-            where_conditions.push("(title CONTAINS $search OR content CONTAINS $search)".to_string());
-            bindings.push(("search", serde_json::Value::String(search.clone())));
+            documents_query = self.db.client.query(
+                "SELECT * FROM document 
+                 WHERE space_id = $space_id 
+                 AND is_deleted = false 
+                 AND (title CONTAINS $search OR content CONTAINS $search)
+                 ORDER BY order_index ASC, created_at DESC 
+                 LIMIT $limit START $offset"
+            )
+            .bind(("space_id", space_thing.clone()))
+            .bind(("search", search))
+            .bind(("limit", limit))
+            .bind(("offset", offset));
         }
 
-        // 添加父文档过滤
-        if let Some(parent_id) = &query.parent_id {
-            where_conditions.push("parent_id = $parent_id".to_string());
-            bindings.push(("parent_id", serde_json::Value::String(format!("document:{}", parent_id))));
-        }
+        let mut result = documents_query.await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
-        // 添加发布状态过滤
-        if let Some(is_public) = query.is_public {
-            where_conditions.push("is_public = $is_public".to_string());
-            bindings.push(("is_public", serde_json::Value::Bool(is_public)));
-        }
-
-        let where_clause = where_conditions.join(" AND ");
-
-        // 查询文档列表 - tags字段暂时使用空数组，children_count暂时设为0
-        let documents_query = format!(
-            "SELECT id, title, slug, excerpt, is_public, parent_id, order_index, author_id, 
-                    view_count, created_at, updated_at, [] as tags, 0 as children_count
-             FROM document 
-             WHERE {} 
-             ORDER BY order_index ASC, created_at DESC 
-             LIMIT $limit START $offset",
-            where_clause
-        );
-
-        // Debug logging - remove in production
-        // tracing::debug!("Document query: {}", documents_query);
-        // tracing::debug!("Query bindings: {:?}", bindings);
-
-        let mut documents_result = self.db.client.query(&documents_query);
-        for (key, value) in &bindings {
-            documents_result = documents_result.bind((key, value));
-        }
-
-        let documents: Vec<DocumentListItem> = documents_result
-            .await
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+        let documents_db: Vec<crate::models::document::DocumentDb> = result
             .take(0)
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
-        // tracing::debug!("Found {} documents", documents.len());
+        // 转换为DocumentListItem
+        let documents: Vec<DocumentListItem> = documents_db.into_iter()
+            .map(|db| {
+                let doc: Document = db.into();
+                doc.into()
+            })
+            .collect();
 
-        // 查询总数
-        let count_query = format!(
-            "SELECT count() FROM document WHERE {} GROUP ALL",
-            where_clause
-        );
 
-        let mut count_result = self.db.client.query(&count_query);
-        for (key, value) in &bindings {
-            if *key != "limit" && *key != "offset" {
-                count_result = count_result.bind((key, value));
-            }
-        }
+        // 暂时使用简单的总数计算 - 由于分页问题，暂时查询所有文档获取总数
+        let all_docs_query = self.db.client.query(
+            "SELECT * FROM document 
+             WHERE space_id = $space_id 
+             AND is_deleted = false"
+        ).bind(("space_id", space_thing.clone()));
 
-        let mut count_response = count_result
-            .await
+        let mut all_docs_result = all_docs_query.await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
-            
-        let count_results: Vec<surrealdb::sql::Value> = count_response
+
+        let all_docs: Vec<crate::models::document::DocumentDb> = all_docs_result
             .take(0)
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
-        // 将 surrealdb::sql::Value 转换为 serde_json::Value
-        let total = if let Some(first_result) = count_results.first() {
-            let json_value: serde_json::Value = first_result.clone().try_into()
-                .map_err(|_| ApiError::InternalServerError("Failed to convert count result".to_string()))?;
-            json_value
-                .get("count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as u32
-        } else {
-            0
-        };
+        let total = all_docs.len() as u32;
 
         let total_pages = (total + limit - 1) / limit;
 

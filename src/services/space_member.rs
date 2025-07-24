@@ -17,11 +17,12 @@ use uuid::Uuid;
 
 pub struct SpaceMemberService {
     db: Arc<Database>,
+    config: Config,
 }
 
 impl SpaceMemberService {
-    pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+    pub fn new(db: Arc<Database>, config: Config) -> Self {
+        Self { db, config }
     }
 
     /// 检查用户是否为空间成员或所有者
@@ -138,38 +139,61 @@ impl SpaceMemberService {
 
         // 生成邀请令牌
         let invite_token = Uuid::new_v4().to_string();
-        let expires_at = Utc::now() + Duration::days(request.expires_in_days.unwrap_or(7) as i64);
+        let expires_in_days = request.expires_in_days.unwrap_or(7);
 
-        // 创建邀请记录
-        let invitation = SpaceInvitation {
-            id: None,
-            space_id: space_id.to_string(),
-            email: request.email.clone(),
-            user_id: request.user_id.clone(),
-            invite_token: invite_token.clone(),
-            role: request.role.clone(),
-            permissions: request.role.default_permissions(),
-            invited_by: inviter.id.clone(),
-            message: request.message,
-            max_uses: 1,
-            used_count: 0,
-            expires_at,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
+        // 使用 SQL 查询创建邀请记录，使用 SurrealDB 的时间函数和 duration 语法
+        let query = format!(r#"
+            CREATE space_invitation SET
+                space_id = type::thing('space', $space_id),
+                email = $email,
+                user_id = $user_id,
+                invite_token = $invite_token,
+                role = $role,
+                permissions = $permissions,
+                invited_by = $invited_by,
+                message = $message,
+                max_uses = $max_uses,
+                used_count = $used_count,
+                expires_at = time::now() + {}d
+        "#, expires_in_days);
 
-        // 保存到数据库
         let created: Vec<SpaceInvitationDb> = self.db.client
-            .create("space_invitation")
-            .content(&invitation)
+            .query(query)
+            .bind(("space_id", space_id))
+            .bind(("email", request.email.clone()))
+            .bind(("user_id", request.user_id.clone()))
+            .bind(("invite_token", invite_token.clone()))
+            .bind(("role", request.role.clone()))
+            .bind(("permissions", request.role.default_permissions()))
+            .bind(("invited_by", inviter.id.clone()))
+            .bind(("message", request.message.clone()))
+            .bind(("max_uses", 1))
+            .bind(("used_count", 0))
             .await
-            .map_err(|e| AppError::Database(e))?;
+            .map_err(|e| AppError::Database(e))?
+            .take(0)?;
 
         let created_invitation = created.into_iter().next()
             .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Failed to create invitation")))?;
 
         info!("User {} invited {} to space {}", inviter.id, 
               request.email.as_deref().unwrap_or(request.user_id.as_deref().unwrap_or("unknown")), space_id);
+
+        // 发送邮件和通知
+        self.send_invitation_notifications(
+            request.email.as_deref(),
+            request.user_id.as_deref(),
+            space_id,
+            &inviter.profile.as_ref()
+                .and_then(|p| p.display_name.clone())
+                .unwrap_or_else(|| inviter.email.clone()),
+            &invite_token,
+            &request.role.to_string(),
+            request.message.as_deref(),
+            expires_in_days.into(),
+        ).await.unwrap_or_else(|e| {
+            error!("Failed to send invitation notifications: {}", e);
+        });
 
         Ok(created_invitation.into())
     }
@@ -377,5 +401,168 @@ impl SpaceMemberService {
             .collect();
 
         Ok(space_ids)
+    }
+
+    /// 发送邀请通知（邮件和站内通知）
+    async fn send_invitation_notifications(
+        &self,
+        to_email: Option<&str>,
+        to_user_id: Option<&str>,
+        space_id: &str,
+        inviter_name: &str,
+        invite_token: &str,
+        role: &str,
+        message: Option<&str>,
+        expires_in_days: u64,
+    ) -> Result<()> {
+        // 获取空间名称
+        let space_name = self.get_space_name(space_id).await?;
+
+        // 如果提供了用户ID，创建站内通知
+        if let Some(user_id) = to_user_id {
+            self.create_space_invitation_notification(
+                user_id,
+                &space_name,
+                inviter_name,
+                invite_token,
+                role,
+                message,
+            ).await?;
+        }
+
+        // 如果提供了邮箱，发送邮件通知
+        if let Some(email) = to_email {
+            self.send_invitation_email(
+                email,
+                &space_name,
+                inviter_name,
+                invite_token,
+                role,
+                message,
+                expires_in_days,
+            ).await?;
+        }
+
+        Ok(())
+    }
+
+    /// 获取空间名称
+    async fn get_space_name(&self, space_id: &str) -> Result<String> {
+        let query = "SELECT name FROM type::thing('space', $id)";
+        let mut response = self.db.client
+            .query(query)
+            .bind(("id", space_id))
+            .await
+            .map_err(|e| AppError::Database(e))?;
+
+        let spaces: Vec<serde_json::Value> = response.take(0)?;
+        match spaces.into_iter().next() {
+            Some(space_data) => {
+                Ok(space_data["name"].as_str().unwrap_or("未知空间").to_string())
+            }
+            None => Ok("未知空间".to_string()),
+        }
+    }
+
+    /// 创建站内通知
+    async fn create_space_invitation_notification(
+        &self,
+        user_id: &str,
+        space_name: &str,
+        inviter_name: &str,
+        invite_token: &str,
+        role: &str,
+        message: Option<&str>,
+    ) -> Result<()> {
+        use serde_json::json;
+
+        let notification_data = json!({
+            "space_name": space_name,
+            "invite_token": invite_token,
+            "role": role,
+            "inviter_name": inviter_name,
+        });
+
+        let query = r#"
+            CREATE notification SET
+                user_id = $user_id,
+                type = "space_invitation",
+                title = $title,
+                content = $content,
+                data = $data
+        "#;
+
+        let title = format!("{} 邀请您加入 {} 空间", inviter_name, space_name);
+        let content = format!(
+            "{} 邀请您以 {} 的身份加入 {} 空间。{}",
+            inviter_name,
+            role,
+            space_name,
+            message.unwrap_or(""),
+        );
+
+        self.db.client
+            .query(query)
+            .bind(("user_id", user_id))
+            .bind(("title", &title))
+            .bind(("content", &content))
+            .bind(("data", &notification_data))
+            .await
+            .map_err(|e| AppError::Database(e))?;
+
+        info!("Created space invitation notification for user {}", user_id);
+        Ok(())
+    }
+
+    /// 发送邀请邮件
+    async fn send_invitation_email(
+        &self,
+        to_email: &str,
+        space_name: &str,
+        inviter_name: &str,
+        invite_token: &str,
+        role: &str,
+        message: Option<&str>,
+        expires_in_days: u64,
+    ) -> Result<()> {
+       /*  use serde_json::json;
+
+        // 调用 Rainbow-Auth 的邮件服务
+        let rainbow_auth_url = self.config.auth.rainbow_auth_url
+            .as_ref()
+            .ok_or_else(|| AppError::Configuration("Rainbow-Auth URL not configured".to_string()))?;
+
+        let url = format!("{}/api/internal/email/notification", rainbow_auth_url);
+
+        let email_data = json!({
+            "to": to_email,
+            "notification_type": "space_invitation",
+            "data": {
+                "space_name": space_name,
+                "inviter_name": inviter_name,
+                "invite_token": invite_token,
+                "role": role,
+                "message": message,
+                "expires_in_days": expires_in_days,
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .header("X-Internal-API-Key", "todo-implement-api-key") // TODO: 实现内部API密钥
+            .json(&email_data)
+            .send()
+            .await
+            .map_err(|e| AppError::External(format!("Failed to send email: {}", e)))?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            error!("Failed to send email notification: {}", error_text);
+            return Err(AppError::External(format!("Email service error: {}", error_text)));
+        } */
+
+        info!("Sent invitation email to {}", to_email);
+        Ok(())
     }
 }

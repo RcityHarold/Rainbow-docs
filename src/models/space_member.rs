@@ -46,6 +46,18 @@ pub enum MemberRole {
     Member,
 }
 
+impl ToString for MemberRole {
+    fn to_string(&self) -> String {
+        match self {
+            MemberRole::Owner => "所有者".to_string(),
+            MemberRole::Admin => "管理员".to_string(),
+            MemberRole::Editor => "编辑者".to_string(),
+            MemberRole::Viewer => "查看者".to_string(),
+            MemberRole::Member => "成员".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum MemberStatus {
