@@ -34,10 +34,13 @@ impl NotificationService {
                 type = $type,
                 title = $title,
                 content = $content,
-                data = $data
+                data = $data,
+                is_read = false,
+                created_at = time::now(),
+                updated_at = time::now()
         "#;
 
-        let created: Vec<NotificationDb> = self.db.client
+        let mut result = self.db.client
             .query(query)
             .bind(("user_id", &request.user_id))
             .bind(("type", &request.notification_type))
@@ -45,11 +48,22 @@ impl NotificationService {
             .bind(("content", &request.content))
             .bind(("data", &request.data))
             .await
-            .map_err(|e| AppError::Database(e))?
-            .take(0)?;
+            .map_err(|e| {
+                error!("Failed to create notification: {}", e);
+                AppError::Database(e)
+            })?;
+
+        let created: Vec<NotificationDb> = result.take(0)
+            .map_err(|e| {
+                error!("Failed to retrieve created notification: {}", e);
+                AppError::Database(e.into())
+            })?;
 
         let notification = created.into_iter().next()
-            .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Failed to create notification")))?;
+            .ok_or_else(|| {
+                error!("No notification was created for user {}", request.user_id);
+                AppError::Internal(anyhow::anyhow!("Failed to create notification"))
+            })?;
 
         info!("Created notification for user {}: {}", request.user_id, request.title);
 
@@ -78,8 +92,17 @@ impl NotificationService {
             .query(&query)
             .bind(("user_id", user_id))
             .await
-            .map_err(|e| AppError::Database(e))?
+            .map_err(|e| {
+                error!("Failed to query notifications: {}", e);
+                AppError::Database(e)
+            })?
             .take(0)?;
+
+        // 调试：记录查询到的通知
+        for notification in &notifications {
+            info!("Retrieved notification - ID: {:?}, data: {:?}", 
+                  notification.id, notification.data);
+        }
 
         // 查询总数
         let count_query = format!(

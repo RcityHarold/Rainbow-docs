@@ -12,7 +12,7 @@ use std::sync::Arc;
 use surrealdb::sql::Thing;
 use tracing::{info, warn, error, debug};
 use validator::Validate;
-use chrono::{Utc, Duration};
+use chrono::Utc;
 use uuid::Uuid;
 
 pub struct SpaceMemberService {
@@ -179,14 +179,30 @@ impl SpaceMemberService {
         info!("User {} invited {} to space {}", inviter.id, 
               request.email.as_deref().unwrap_or(request.user_id.as_deref().unwrap_or("unknown")), space_id);
 
+        // 获取邀请者显示名称，优先使用profile中的名称，否则使用用户ID
+        let inviter_name = inviter.profile.as_ref()
+            .and_then(|p| p.display_name.clone())
+            .filter(|name| !name.is_empty())
+            .or_else(|| {
+                // 如果email不是默认的unknown@example.com，则使用email
+                if inviter.email != "unknown@example.com" {
+                    Some(inviter.email.clone())
+                } else {
+                    // 否则使用用户ID
+                    Some(inviter.id.clone())
+                }
+            })
+            .unwrap_or_else(|| inviter.id.clone());
+        
+        info!("Inviter info - ID: {}, Email: {}, Display name: {}", 
+              inviter.id, inviter.email, inviter_name);
+
         // 发送邮件和通知
         self.send_invitation_notifications(
             request.email.as_deref(),
             request.user_id.as_deref(),
             space_id,
-            &inviter.profile.as_ref()
-                .and_then(|p| p.display_name.clone())
-                .unwrap_or_else(|| inviter.email.clone()),
+            &inviter_name,
             &invite_token,
             &request.role.to_string(),
             request.message.as_deref(),
@@ -201,11 +217,10 @@ impl SpaceMemberService {
     /// 接受邀请
     pub async fn accept_invitation(&self, user_id: &str, request: AcceptInvitationRequest) -> Result<SpaceMember> {
         // 查找邀请
-        let invitation_query = "SELECT * FROM space_invitation WHERE invite_token = $token AND expires_at > $now";
+        let invitation_query = "SELECT * FROM space_invitation WHERE invite_token = $token AND expires_at > time::now()";
         let invitations: Vec<SpaceInvitationDb> = self.db.client
             .query(invitation_query)
             .bind(("token", &request.invite_token))
-            .bind(("now", Utc::now()))
             .await
             .map_err(|e| AppError::Database(e))?
             .take(0)?;
@@ -223,26 +238,26 @@ impl SpaceMemberService {
             return Err(AppError::Conflict("User is already a member of this space".to_string()));
         }
 
-        // 创建成员记录
-        let member = SpaceMember {
-            id: None,
-            space_id: invitation.space_id.id.to_string(),
-            user_id: user_id.to_string(),
-            role: invitation.role.clone(),
-            permissions: invitation.permissions.clone(),
-            invited_by: invitation.invited_by.clone(),
-            invited_at: invitation.created_at,
-            accepted_at: Some(Utc::now()),
-            status: MemberStatus::Accepted,
-            expires_at: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-        };
+        // 使用简单的方法创建成员记录
+        use serde_json::json;
+        
+        let member_data = json!({
+            "space_id": Thing::from(("space", invitation.space_id.id.to_string().as_str())),
+            "user_id": user_id,
+            "role": invitation.role,
+            "permissions": invitation.permissions,
+            "invited_by": invitation.invited_by,
+            "invited_at": invitation.created_at,
+            "accepted_at": Utc::now(),
+            "status": "accepted",
+            "expires_at": null,
+            "created_at": Utc::now(),
+            "updated_at": Utc::now()
+        });
 
-        // 保存成员记录
         let created_members: Vec<SpaceMemberDb> = self.db.client
             .create("space_member")
-            .content(&member)
+            .content(member_data)
             .await
             .map_err(|e| AppError::Database(e))?;
 
@@ -257,7 +272,7 @@ impl SpaceMemberService {
             .map_err(|e| AppError::Database(e))?
             .take(0)?;
 
-        info!("User {} accepted invitation to space {}", user_id, member.space_id);
+        info!("User {} accepted invitation to space {}", user_id, invitation.space_id.id.to_string());
 
         Ok(created_member.into())
     }
@@ -448,19 +463,34 @@ impl SpaceMemberService {
 
     /// 获取空间名称
     async fn get_space_name(&self, space_id: &str) -> Result<String> {
-        let query = "SELECT name FROM type::thing('space', $id)";
+        // 提取实际的空间ID（去掉"space:"前缀，如果存在）
+        let actual_space_id = if space_id.starts_with("space:") {
+            space_id.strip_prefix("space:").unwrap()
+        } else {
+            space_id
+        };
+        
+        let query = "SELECT name FROM space WHERE id = $space_id";
         let mut response = self.db.client
             .query(query)
-            .bind(("id", space_id))
+            .bind(("space_id", Thing::from(("space", actual_space_id))))
             .await
-            .map_err(|e| AppError::Database(e))?;
+            .map_err(|e| {
+                error!("Failed to get space name for {}: {}", space_id, e);
+                AppError::Database(e)
+            })?;
 
         let spaces: Vec<serde_json::Value> = response.take(0)?;
         match spaces.into_iter().next() {
             Some(space_data) => {
-                Ok(space_data["name"].as_str().unwrap_or("未知空间").to_string())
+                let name = space_data["name"].as_str().unwrap_or("未知空间").to_string();
+                info!("Found space name: {} for space: {}", name, space_id);
+                Ok(name)
             }
-            None => Ok("未知空间".to_string()),
+            None => {
+                warn!("No space found for ID: {}", space_id);
+                Ok("未知空间".to_string())
+            }
         }
     }
 
@@ -476,6 +506,7 @@ impl SpaceMemberService {
     ) -> Result<()> {
         use serde_json::json;
 
+        // 创建通知数据
         let notification_data = json!({
             "space_name": space_name,
             "invite_token": invite_token,
@@ -483,14 +514,7 @@ impl SpaceMemberService {
             "inviter_name": inviter_name,
         });
 
-        let query = r#"
-            CREATE notification SET
-                user_id = $user_id,
-                type = "space_invitation",
-                title = $title,
-                content = $content,
-                data = $data
-        "#;
+        info!("Creating notification with data: {}", notification_data);
 
         let title = format!("{} 邀请您加入 {} 空间", inviter_name, space_name);
         let content = format!(
@@ -501,14 +525,58 @@ impl SpaceMemberService {
             message.unwrap_or(""),
         );
 
-        self.db.client
+        // 最终解决方案：将invite_token作为独立字段存储，完全绕过data字段的问题
+        info!("Storing invite_token as separate field: {}", invite_token);
+
+        let query = r#"
+            CREATE notification SET
+                user_id = $user_id,
+                type = $type,
+                title = $title,
+                content = $content,
+                data = NONE,
+                invite_token = $invite_token,
+                space_name = $space_name,
+                role = $role,
+                inviter_name = $inviter_name,
+                is_read = false,
+                created_at = time::now(),
+                updated_at = time::now()
+        "#;
+
+        let mut result = self.db.client
             .query(query)
             .bind(("user_id", user_id))
+            .bind(("type", "space_invitation"))
             .bind(("title", &title))
             .bind(("content", &content))
-            .bind(("data", &notification_data))
+            .bind(("invite_token", invite_token))
+            .bind(("space_name", space_name))
+            .bind(("role", role))
+            .bind(("inviter_name", inviter_name))
             .await
-            .map_err(|e| AppError::Database(e))?;
+            .map_err(|e| {
+                error!("Failed to create notification: {}", e);
+                AppError::Database(e)
+            })?;
+
+        // 获取创建的通知记录
+        let created_notifications: Vec<serde_json::Value> = result.take(0)
+            .map_err(|e| {
+                error!("Failed to retrieve created notification: {}", e);
+                AppError::Database(e.into())
+            })?;
+
+        if created_notifications.is_empty() {
+            error!("No notification was created for user {}", user_id);
+            return Err(AppError::Internal(anyhow::anyhow!("Failed to create notification")));
+        }
+
+        // 记录创建的通知详情
+        if let Some(created_notification) = created_notifications.first() {
+            info!("Successfully created notification: {}", 
+                  serde_json::to_string_pretty(created_notification).unwrap_or_default());
+        }
 
         info!("Created space invitation notification for user {}", user_id);
         Ok(())

@@ -284,23 +284,25 @@ DEFINE INDEX file_type_idx ON file_upload COLUMNS file_type;
 -- 通知表
 DEFINE TABLE notification SCHEMAFULL;
 DEFINE FIELD id ON notification TYPE record(notification);
-DEFINE FIELD recipient_id ON notification TYPE string ASSERT $value != NONE;
-DEFINE FIELD sender_id ON notification TYPE string;
-DEFINE FIELD type ON notification TYPE string ASSERT $value INSIDE ["comment", "mention", "document_update", "space_invite", "system"];
+DEFINE FIELD user_id ON notification TYPE string ASSERT $value != NONE;
+DEFINE FIELD type ON notification TYPE string ASSERT $value INSIDE ["space_invitation", "document_shared", "comment_mention", "document_update", "system"];
 DEFINE FIELD title ON notification TYPE string ASSERT $value != NONE;
-DEFINE FIELD content ON notification TYPE string;
-DEFINE FIELD resource_type ON notification TYPE string;
-DEFINE FIELD resource_id ON notification TYPE string;
+DEFINE FIELD content ON notification TYPE string ASSERT $value != NONE;
+DEFINE FIELD data ON notification TYPE option<object>; -- 额外的数据，如邀请令牌、文档ID等
+DEFINE FIELD invite_token ON notification TYPE option<string>; -- 空间邀请令牌
+DEFINE FIELD space_name ON notification TYPE option<string>; -- 空间名称
+DEFINE FIELD role ON notification TYPE option<string>; -- 邀请角色
+DEFINE FIELD inviter_name ON notification TYPE option<string>; -- 邀请者名称
 DEFINE FIELD is_read ON notification TYPE bool DEFAULT false;
-DEFINE FIELD read_at ON notification TYPE datetime;
-DEFINE FIELD metadata ON notification TYPE object DEFAULT {};
+DEFINE FIELD read_at ON notification TYPE option<datetime>;
 DEFINE FIELD created_at ON notification TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated_at ON notification TYPE datetime DEFAULT time::now();
 
--- 通知索引
-DEFINE INDEX notification_recipient_idx ON notification COLUMNS recipient_id;
-DEFINE INDEX notification_unread_idx ON notification COLUMNS recipient_id, is_read;
-DEFINE INDEX notification_type_idx ON notification COLUMNS type;
+-- 索引
+DEFINE INDEX notification_user_idx ON notification COLUMNS user_id;
+DEFINE INDEX notification_user_unread_idx ON notification COLUMNS user_id, is_read;
 DEFINE INDEX notification_created_idx ON notification COLUMNS created_at;
+DEFINE INDEX notification_invite_token_idx ON notification COLUMNS invite_token;
 
 -- =====================================
 -- 初始数据插入
