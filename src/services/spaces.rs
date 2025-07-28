@@ -92,12 +92,21 @@ impl SpaceService {
         let mut where_conditions = Vec::new();
         let mut params: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
 
-        // 权限过滤：显示公开空间或用户拥有的空间
+        // 权限过滤：只显示用户拥有的空间或用户加入的空间
+        // 公开空间应该通过直接链接访问，而不是在列表中显示
         if let Some(user) = user {
-            where_conditions.push("(is_public = true OR owner_id = $user_id)");
+            info!("Listing spaces for user: {}", user.id);
+            
+            // 由于SurrealDB子查询语法问题，分两步获取：
+            // 1. 先获取用户拥有的空间
+            // 2. 再获取用户加入的空间，然后合并
+            
+            // 这里先查询用户拥有的空间
+            where_conditions.push("owner_id = $user_id");
             params.insert("user_id".to_string(), user.id.clone().into());
         } else {
-            where_conditions.push("is_public = true");
+            // 未登录用户看不到任何空间列表
+            where_conditions.push("1 = 0");
         }
 
         // 基础过滤条件
@@ -153,12 +162,18 @@ impl SpaceService {
             where_clause, order_clause, limit, offset
         );
 
+        info!("Executing space list query: {}", data_query);
+        info!("Query params: {:?}", params);
+
         // 首先获取数据库格式的数据
         let spaces_db: Vec<crate::models::space::SpaceDb> = self.db.client
             .query(&data_query)
             .bind(params)
             .await
-            .map_err(|e| AppError::Database(e))?
+            .map_err(|e| {
+                error!("Failed to execute space list query: {}", e);
+                AppError::Database(e)
+            })?
             .take(0)?;
         
         // 转换为 Space 类型
@@ -169,6 +184,8 @@ impl SpaceService {
         // 如果是登录用户，还需要添加用户作为成员的空间
         if let Some(user) = user {
             let member_spaces = self.get_user_member_spaces(&user.id).await?;
+            info!("Found {} member spaces for user {}", member_spaces.len(), user.id);
+            
             // 合并空间，避免重复
             let existing_ids: std::collections::HashSet<String> = spaces.iter()
                 .filter_map(|s| s.id.clone())
@@ -434,6 +451,106 @@ impl SpaceService {
         })
     }
 
+    /// 获取用户作为成员的空间列表
+    async fn get_user_member_spaces(&self, user_id: &str) -> Result<Vec<Space>> {
+        info!("Getting member spaces for user: {}", user_id);
+        
+        // 清理user_id格式，去掉user:前缀以匹配数据库存储格式
+        let clean_user_id = if user_id.starts_with("user:") {
+            user_id.strip_prefix("user:").unwrap_or(user_id)
+        } else {
+            user_id
+        };
+        info!("Querying member spaces with cleaned user_id: {} (original: {})", clean_user_id, user_id);
+        
+        // 查询用户是成员的space_id列表
+        let member_query = "SELECT space_id FROM space_member WHERE user_id = $user_id AND status = 'accepted'";
+        let member_results: Vec<serde_json::Value> = self.db.client
+            .query(member_query)
+            .bind(("user_id", clean_user_id))
+            .await
+            .map_err(|e| {
+                error!("Failed to query space members: {}", e);
+                AppError::Database(e)
+            })?
+            .take(0)?;
+            
+        // 如果没有找到结果，尝试查看所有space_member记录进行调试
+        if member_results.is_empty() {
+            info!("No member spaces found for cleaned user_id: {} (original: {}), checking all space_member records for debugging", clean_user_id, user_id);
+            let all_members: Vec<serde_json::Value> = self.db.client
+                .query("SELECT user_id, space_id, status FROM space_member LIMIT 5")
+                .await
+                .map_err(|e| AppError::Database(e))?
+                .take(0)?;
+            
+            for member in &all_members {
+                info!("Found space_member record: {:?}", member);
+            }
+        }
+        
+        info!("Found {} space member records for user {}", member_results.len(), user_id);
+        
+        // 提取space_id列表
+        let mut space_ids = Vec::new();
+        for result in member_results {
+            if let Some(space_id_value) = result.get("space_id") {
+                info!("Processing space_id value: {:?}", space_id_value);
+                
+                // 处理SurrealDB Thing对象格式
+                if let Some(space_id_obj) = space_id_value.as_object() {
+                    if let Some(id_value) = space_id_obj.get("id") {
+                        if let Some(id_obj) = id_value.as_object() {
+                            if let Some(actual_id) = id_obj.get("String") {
+                                if let Some(space_id_str) = actual_id.as_str() {
+                                    space_ids.push(space_id_str.to_string());
+                                    info!("Found member space_id: {}", space_id_str);
+                                }
+                            }
+                        }
+                    }
+                }
+                // 也尝试直接字符串格式（向后兼容）
+                else if let Some(space_id_str) = space_id_value.as_str() {
+                    let clean_id = if space_id_str.starts_with("space:") {
+                        space_id_str.strip_prefix("space:").unwrap_or(space_id_str)
+                    } else {
+                        space_id_str
+                    };
+                    space_ids.push(clean_id.to_string());
+                    info!("Found member space_id (string format): {}", clean_id);
+                }
+            }
+        }
+        
+        if space_ids.is_empty() {
+            info!("No member spaces found for user {}", user_id);
+            return Ok(Vec::new());
+        }
+        
+        // 查询对应的space记录
+        let mut spaces = Vec::new();
+        for space_id in space_ids {
+            let space_query = "SELECT * FROM space WHERE id = $space_id AND is_deleted = false";
+            let space_results: Vec<crate::models::space::SpaceDb> = self.db.client
+                .query(space_query)
+                .bind(("space_id", Thing::from(("space", space_id.as_str()))))
+                .await
+                .map_err(|e| {
+                    error!("Failed to query space: {}", e);
+                    AppError::Database(e)
+                })?
+                .take(0)?;
+                
+            for space_db in space_results {
+                spaces.push(space_db.into());
+            }
+        }
+        
+        info!("Retrieved {} actual spaces for user {}", spaces.len(), user_id);
+        Ok(spaces)
+    }
+
     /// 记录活动日志
     async fn log_activity(&self, user_id: &str, action: &str, resource_type: &str, resource_id: &str) -> Result<()> {
         let activity = serde_json::json!({
@@ -459,50 +576,6 @@ impl SpaceService {
         Ok(())
     }
 
-    /// 获取用户作为成员的空间
-    async fn get_user_member_spaces(&self, user_id: &str) -> Result<Vec<Space>> {
-        let member_query = "
-            SELECT space_id FROM space_member 
-            WHERE user_id = $user_id 
-            AND status = 'accepted'
-        ";
-
-        let member_results: Vec<serde_json::Value> = self.db.client
-            .query(member_query)
-            .bind(("user_id", user_id))
-            .await
-            .map_err(|e| AppError::Database(e))?
-            .take(0)?;
-
-        // 获取空间ID列表
-        let space_ids: Vec<String> = member_results.iter()
-            .filter_map(|result| {
-                result.get("space_id")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-            .collect();
-
-        if space_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // 查询这些空间的详细信息
-        let mut spaces = Vec::new();
-        for space_id in space_ids {
-            if let Ok(Some(space_db)) = self.db.client
-                .query("SELECT * FROM space WHERE id = $space_id AND is_deleted = false")
-                .bind(("space_id", space_id))
-                .await
-                .map_err(|e| AppError::Database(e))
-                .and_then(|mut result| result.take::<Option<crate::models::space::SpaceDb>>(0).map_err(|e| AppError::Database(e)))
-            {
-                spaces.push(space_db.into());
-            }
-        }
-
-        Ok(spaces)
-    }
 }
 
 #[cfg(test)]

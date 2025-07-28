@@ -126,20 +126,29 @@ impl NotificationService {
     /// 标记通知为已读
     pub async fn mark_as_read(&self, user_id: &str, notification_id: &str) -> Result<Notification> {
         let query = r#"
-            UPDATE notification:$id SET
+            UPDATE notification SET
                 is_read = true,
                 read_at = time::now(),
                 updated_at = time::now()
-            WHERE user_id = $user_id
+            WHERE id = type::thing('notification', $id) AND user_id = $user_id
         "#;
 
-        let updated: Vec<NotificationDb> = self.db.client
+        let mut result = self.db.client
             .query(query)
             .bind(("id", notification_id))
             .bind(("user_id", user_id))
             .await
-            .map_err(|e| AppError::Database(e))?
-            .take(0)?;
+            .map_err(|e| {
+                error!("Failed to mark notification as read: {}", e);
+                AppError::Database(e)
+            })?;
+
+        let updated: Vec<NotificationDb> = result
+            .take(0)
+            .map_err(|e| {
+                error!("Failed to take updated notification: {}", e);
+                AppError::Database(e.into())
+            })?;
 
         let notification = updated.into_iter().next()
             .ok_or_else(|| AppError::NotFound("Notification not found".to_string()))?;

@@ -3,17 +3,28 @@ use crate::error::{AppError, Result};
 use crate::models::space_member::{
     SpaceMember, SpaceMemberDb, SpaceInvitation, SpaceInvitationDb,
     InviteMemberRequest, UpdateMemberRequest, AcceptInvitationRequest,
-    MemberRole, MemberStatus, SpaceMemberResponse
+    MemberStatus, SpaceMemberResponse, MemberRole
 };
 use crate::services::auth::User;
 use crate::services::database::Database;
 use serde_json::Value;
 use std::sync::Arc;
 use surrealdb::sql::Thing;
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, error};
 use validator::Validate;
 use chrono::Utc;
 use uuid::Uuid;
+
+/// 清理用户ID格式，确保和数据库存储格式一致
+fn clean_user_id_format(user_id: &str) -> String {
+    // 只移除 user: 前缀，保留 ⟨⟩ 符号以匹配数据库格式
+    let cleaned = user_id
+        .trim()
+        .strip_prefix("user:").unwrap_or(user_id)
+        .trim();
+    
+    cleaned.to_string()
+}
 
 pub struct SpaceMemberService {
     db: Arc<Database>,
@@ -30,6 +41,10 @@ impl SpaceMemberService {
         let Some(uid) = user_id else {
             return Ok(false);
         };
+
+        // 清理user_id格式，确保和数据库存储格式一致
+        let clean_user_id = clean_user_id_format(uid);
+        info!("Checking space access for clean_user_id: {} (original: {})", clean_user_id, uid);
 
         // 提取实际的空间ID（去掉"space:"前缀，如果存在）
         let actual_space_id = if space_id.starts_with("space:") {
@@ -49,24 +64,32 @@ impl SpaceMemberService {
         if let Ok(spaces) = owner_result.take::<Vec<Value>>(0) {
             if let Some(space) = spaces.first() {
                 if let Some(owner_id) = space.get("owner_id").and_then(|v| v.as_str()) {
-                    if owner_id == uid {
+                    let clean_owner_id = clean_user_id_format(owner_id);
+                    if clean_owner_id == clean_user_id {
+                        info!("User is space owner, granting access");
                         return Ok(true);
                     }
                 }
             }
         }
 
-        // 检查是否为空间成员
+        // 检查是否为空间成员 - 只需要检查存在性，不需要完整的记录
         let member_query = "SELECT id FROM space_member WHERE space_id = $space_id AND user_id = $user_id AND status = 'accepted'";
-        let member_result: Vec<SpaceMemberDb> = self.db.client
+        let member_result: Vec<serde_json::Value> = self.db.client
             .query(member_query)
             .bind(("space_id", Thing::from(("space", actual_space_id))))
-            .bind(("user_id", uid))
+            .bind(("user_id", &clean_user_id))
             .await
             .map_err(|e| AppError::Database(e))?
             .take(0)?;
 
-        Ok(!member_result.is_empty())
+        let has_access = !member_result.is_empty();
+        if has_access {
+            info!("User found as space member, granting access");
+        } else {
+            info!("User not found as space member or owner");
+        }
+        Ok(has_access)
     }
 
     /// 检查用户在空间中的权限
@@ -77,6 +100,10 @@ impl SpaceMemberService {
         } else {
             space_id
         };
+
+        // 清理user_id格式，确保和数据库存储格式一致
+        let clean_user_id = clean_user_id_format(user_id);
+        info!("Checking permission '{}' for clean_user_id: {} (original: {}) in space: {}", permission, clean_user_id, user_id, actual_space_id);
 
         // 首先检查是否为空间所有者
         let owner_query = "SELECT owner_id FROM space WHERE id = $space_id";
@@ -89,7 +116,10 @@ impl SpaceMemberService {
         if let Ok(spaces) = owner_result.take::<Vec<Value>>(0) {
             if let Some(space) = spaces.first() {
                 if let Some(owner_id) = space.get("owner_id").and_then(|v| v.as_str()) {
-                    if owner_id == user_id {
+                    // 比较owner_id时也需要考虑格式一致性
+                    let clean_owner_id = clean_user_id_format(owner_id);
+                    if clean_owner_id == clean_user_id {
+                        info!("User is space owner, granting permission");
                         return Ok(true); // 所有者拥有所有权限
                     }
                 }
@@ -98,24 +128,51 @@ impl SpaceMemberService {
 
         // 检查成员权限
         let member_query = "SELECT role, permissions FROM space_member WHERE space_id = $space_id AND user_id = $user_id AND status = 'accepted'";
-        let members: Vec<SpaceMemberDb> = self.db.client
+        let members: Vec<serde_json::Value> = self.db.client
             .query(member_query)
             .bind(("space_id", Thing::from(("space", actual_space_id))))
-            .bind(("user_id", user_id))
+            .bind(("user_id", &clean_user_id))
             .await
             .map_err(|e| AppError::Database(e))?
             .take(0)?;
 
         if let Some(member) = members.first() {
+            let role_str = member.get("role").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let permissions_array = member.get("permissions").and_then(|v| v.as_array());
+            
+            info!("Found space member with role: {}, permissions: {:?}", role_str, permissions_array);
+            
+            // 解析角色
+            let member_role = match role_str {
+                "owner" => MemberRole::Owner,
+                "admin" => MemberRole::Admin,
+                "editor" => MemberRole::Editor,
+                "viewer" => MemberRole::Viewer,
+                "member" => MemberRole::Member,
+                _ => MemberRole::Member,
+            };
+            
             // 检查角色默认权限
-            if member.role.can_perform(permission) {
+            if member_role.can_perform(permission) {
+                info!("Permission granted by role: {:?}", member_role);
                 return Ok(true);
             }
             
             // 检查自定义权限
-            if member.permissions.contains(&permission.to_string()) {
-                return Ok(true);
+            if let Some(perms) = permissions_array {
+                for perm in perms {
+                    if let Some(perm_str) = perm.as_str() {
+                        if perm_str == permission {
+                            info!("Permission granted by custom permissions");
+                            return Ok(true);
+                        }
+                    }
+                }
             }
+            
+            info!("Permission denied: role {:?} does not have permission '{}'", member_role, permission);
+        } else {
+            info!("No space member record found for user_id: {}", clean_user_id);
         }
 
         Ok(false)
@@ -141,6 +198,15 @@ impl SpaceMemberService {
         let invite_token = Uuid::new_v4().to_string();
         let expires_in_days = request.expires_in_days.unwrap_or(7);
 
+        // 提取纯净的space_id，避免嵌套Thing
+        let clean_space_id = if space_id.starts_with("space:") {
+            space_id.strip_prefix("space:").unwrap()
+        } else {
+            space_id
+        };
+
+        info!("Creating invitation with clean_space_id: {}", clean_space_id);
+
         // 使用 SQL 查询创建邀请记录，使用 SurrealDB 的时间函数和 duration 语法
         let query = format!(r#"
             CREATE space_invitation SET
@@ -159,7 +225,7 @@ impl SpaceMemberService {
 
         let created: Vec<SpaceInvitationDb> = self.db.client
             .query(query)
-            .bind(("space_id", space_id))
+            .bind(("space_id", clean_space_id))
             .bind(("email", request.email.clone()))
             .bind(("user_id", request.user_id.clone()))
             .bind(("invite_token", invite_token.clone()))
@@ -216,14 +282,26 @@ impl SpaceMemberService {
 
     /// 接受邀请
     pub async fn accept_invitation(&self, user_id: &str, request: AcceptInvitationRequest) -> Result<SpaceMember> {
-        // 查找邀请
-        let invitation_query = "SELECT * FROM space_invitation WHERE invite_token = $token AND expires_at > time::now()";
-        let invitations: Vec<SpaceInvitationDb> = self.db.client
-            .query(invitation_query)
-            .bind(("token", &request.invite_token))
+        // 查找邀请 - 使用更简单的查询方法
+        info!("Searching for invitation with token: {}", &request.invite_token);
+        
+        // 先获取所有邀请，然后在内存中过滤（避免参数绑定问题）
+        let all_invitations: Vec<SpaceInvitationDb> = self.db.client
+            .select("space_invitation")
             .await
-            .map_err(|e| AppError::Database(e))?
-            .take(0)?;
+            .map_err(|e| {
+                error!("Failed to select invitations: {}", e);
+                AppError::Database(e)
+            })?;
+            
+        // 在内存中过滤出匹配的邀请
+        let now = Utc::now();
+        let invitations: Vec<SpaceInvitationDb> = all_invitations
+            .into_iter()
+            .filter(|inv| {
+                inv.invite_token == request.invite_token && inv.expires_at > now
+            })
+            .collect();
 
         let invitation = invitations.into_iter().next()
             .ok_or_else(|| AppError::NotFound("Invitation not found or expired".to_string()))?;
@@ -238,39 +316,97 @@ impl SpaceMemberService {
             return Err(AppError::Conflict("User is already a member of this space".to_string()));
         }
 
-        // 使用简单的方法创建成员记录
-        use serde_json::json;
-        
-        let member_data = json!({
-            "space_id": Thing::from(("space", invitation.space_id.id.to_string().as_str())),
-            "user_id": user_id,
-            "role": invitation.role,
-            "permissions": invitation.permissions,
-            "invited_by": invitation.invited_by,
-            "invited_at": invitation.created_at,
-            "accepted_at": Utc::now(),
-            "status": "accepted",
-            "expires_at": null,
-            "created_at": Utc::now(),
-            "updated_at": Utc::now()
-        });
+        // 使用 SQL 查询创建成员记录，让 SurrealDB 处理所有时间字段
+        let create_member_query = r#"
+            CREATE space_member SET
+                space_id = $space_id,
+                user_id = $user_id,
+                role = $role,
+                permissions = $permissions,
+                invited_by = $invited_by,
+                invited_at = time::now(),
+                accepted_at = time::now(),
+                status = 'accepted',
+                expires_at = NONE,
+                created_at = time::now(),
+                updated_at = time::now()
+        "#;
 
-        let created_members: Vec<SpaceMemberDb> = self.db.client
-            .create("space_member")
-            .content(member_data)
+        // 提取纯净的space_id和user_id，避免嵌套Thing
+        let raw_space_id = invitation.space_id.id.to_string();
+        info!("Raw space_id from invitation: {}", raw_space_id);
+        
+        // 处理可能的嵌套Thing格式 space:⟨⟨space:xxxxx⟩⟩
+        let clean_space_id = if raw_space_id.contains("⟨⟨space:") {
+            // 提取最内层的ID，从 space:⟨⟨space:xxxxx⟩⟩ 中提取 xxxxx
+            if let Some(start) = raw_space_id.find("⟨⟨space:") {
+                let after_start = &raw_space_id[start + 8..]; // 跳过 "⟨⟨space:"
+                if let Some(end) = after_start.find("⟩⟩") {
+                    &after_start[..end]
+                } else {
+                    &raw_space_id
+                }
+            } else {
+                &raw_space_id
+            }
+        } else if raw_space_id.starts_with("space:") {
+            raw_space_id.strip_prefix("space:").unwrap()
+        } else {
+            &raw_space_id
+        };
+        
+        // 清理user_id格式，确保存储的是纯净的UUID
+        let clean_user_id = clean_user_id_format(user_id);
+
+        info!("Creating space member with clean_space_id: {}, clean_user_id: {}", clean_space_id, clean_user_id);
+
+        let mut create_result = self.db.client
+            .query(create_member_query)
+            .bind(("space_id", Thing::from(("space", clean_space_id))))
+            .bind(("user_id", clean_user_id))
+            .bind(("role", invitation.role.clone()))
+            .bind(("permissions", invitation.permissions.clone()))
+            .bind(("invited_by", invitation.invited_by.clone()))
             .await
-            .map_err(|e| AppError::Database(e))?;
+            .map_err(|e| {
+                error!("Failed to create space member: {}", e);
+                AppError::Database(e)
+            })?;
+
+        let created_members: Vec<SpaceMemberDb> = create_result
+            .take(0)
+            .map_err(|e| {
+                error!("Failed to take created member: {}", e);
+                AppError::Database(e.into())
+            })?;
 
         let created_member = created_members.into_iter().next()
             .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Failed to create member")))?;
 
-        // 更新邀请使用次数
-        let _: Option<SpaceInvitationDb> = self.db.client
-            .query("UPDATE space_invitation SET used_count = used_count + 1 WHERE invite_token = $token")
-            .bind(("token", &request.invite_token))
-            .await
-            .map_err(|e| AppError::Database(e))?
-            .take(0)?;
+        // 更新邀请使用次数 - 使用简单的更新方法
+        if let Some(invitation_id) = &invitation.id {
+            let update_query = r#"
+                UPDATE $invitation_id SET
+                    used_count = used_count + 1,
+                    updated_at = time::now()
+            "#;
+            
+            let mut update_result = self.db.client
+                .query(update_query)
+                .bind(("invitation_id", Thing::from(("space_invitation", invitation_id.id.to_string().as_str()))))
+                .await
+                .map_err(|e| {
+                    error!("Failed to update invitation used_count: {}", e);
+                    AppError::Database(e)
+                })?;
+                
+            let _: Vec<Value> = update_result
+                .take(0)
+                .map_err(|e| {
+                    error!("Failed to take update results: {}", e);
+                    AppError::Database(e.into())
+                })?;
+        }
 
         info!("User {} accepted invitation to space {}", user_id, invitation.space_id.id.to_string());
 
@@ -279,9 +415,9 @@ impl SpaceMemberService {
 
     /// 获取空间成员列表
     pub async fn list_space_members(&self, space_id: &str, requester: &User) -> Result<Vec<SpaceMemberResponse>> {
-        // 检查查看权限
-        if !self.check_permission(space_id, &requester.id, "members.manage").await? {
-            return Err(AppError::Authorization("Permission denied: members.manage required".to_string()));
+        // 检查查看权限 - 只要是空间成员就可以查看成员列表
+        if !self.can_access_space(space_id, Some(&requester.id)).await? {
+            return Err(AppError::Authorization("Permission denied: space access required".to_string()));
         }
 
         // 提取实际的空间ID（去掉"space:"前缀，如果存在）
