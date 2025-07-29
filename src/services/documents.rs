@@ -159,9 +159,16 @@ impl DocumentService {
             return Err(ApiError::Conflict("Document slug already exists in this space".to_string()));
         }
 
-        // 验证父文档存在性
+        // 提取space_id的实际ID部分（去掉"space:"前缀）
+        let actual_space_id = if space_id.starts_with("space:") {
+            space_id.strip_prefix("space:").unwrap()
+        } else {
+            space_id
+        };
+
+        // 验证父文档存在性（使用清理后的space_id）
         if let Some(parent_id) = &request.parent_id {
-            self.verify_parent_document(space_id, parent_id).await?;
+            self.verify_parent_document(actual_space_id, parent_id).await?;
         }
 
         // 处理Markdown内容
@@ -199,13 +206,6 @@ impl DocumentService {
                     parent_id = NONE,
                     order_index = $order_index
             "#
-        };
-        
-        // 提取space_id的实际ID部分（去掉"space:"前缀）
-        let actual_space_id = if space_id.starts_with("space:") {
-            space_id.strip_prefix("space:").unwrap()
-        } else {
-            space_id
         };
 
         let mut query_builder = self.db.client.query(query);
@@ -513,18 +513,17 @@ impl DocumentService {
             if parent_id.is_none() {
                 tree_map.insert(doc_id, node);
             } else if let Some(parent_id_str) = parent_id {
-                if let Some(parent_id_thing) = parent_id_str.to_string().split(':').nth(1) {
-                    tree_map.entry(parent_id_thing.to_string())
-                        .or_insert_with(|| DocumentTreeNode {
-                            id: parent_id_thing.to_string(),
-                            title: "Unknown".to_string(),
-                            slug: "unknown".to_string(),
-                            is_public: false,
-                            order_index: 0,
-                            children: Vec::new(),
-                        })
-                        .children.push(node);
-                }
+                // parent_id_str 应该是完整的格式，直接使用
+                tree_map.entry(parent_id_str.clone())
+                    .or_insert_with(|| DocumentTreeNode {
+                        id: parent_id_str.clone(),
+                        title: "Unknown".to_string(),
+                        slug: "unknown".to_string(),
+                        is_public: false,
+                        order_index: 0,
+                        children: Vec::new(),
+                    })
+                    .children.push(node);
             }
         }
 
@@ -770,12 +769,14 @@ impl DocumentService {
             AND is_deleted = false
         ";
 
-        let result: Vec<surrealdb::sql::Value> = self.db.client
+        let mut response = self.db.client
             .query(query)
             .bind(("parent_id", Thing::from(("document", parent_id))))
             .bind(("space_id", Thing::from(("space", space_id))))
             .await
-            .map_err(|e| ApiError::DatabaseError(e.to_string()))?
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            
+        let result: Vec<serde_json::Value> = response
             .take(0)
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 

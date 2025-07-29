@@ -194,8 +194,10 @@ impl MarkdownProcessor {
             let truncated = &plain_text[..end];
             
             // 尝试在单词或中文字符边界截断
-            if let Some(last_space) = truncated.rfind(|c: char| c.is_whitespace() || c == '。' || c == '，' || c == '！' || c == '？') {
-                format!("{}...", &truncated[..=last_space].trim())
+            let chars: Vec<char> = truncated.chars().collect();
+            if let Some(pos) = chars.iter().rposition(|&c| c.is_whitespace() || c == '。' || c == '，' || c == '！' || c == '？') {
+                let safe_truncated: String = chars[..=pos].iter().collect();
+                format!("{}...", safe_truncated.trim())
             } else {
                 format!("{}...", truncated)
             }
