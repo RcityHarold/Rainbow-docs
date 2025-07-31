@@ -486,8 +486,10 @@ impl DocumentService {
 
         // 构建文档映射
         let mut doc_map = std::collections::HashMap::new();
+        let mut children_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
         let mut root_docs = Vec::new();
 
+        // 第一次遍历：创建所有节点并识别父子关系
         for doc in all_documents {
             if let Some(doc_id) = &doc.id {
                 let node = DocumentTreeNode {
@@ -499,41 +501,51 @@ impl DocumentService {
                     children: Vec::new(),
                 };
                 
-                if doc.parent_id.is_none() {
+                doc_map.insert(doc_id.clone(), node);
+                
+                if let Some(parent_id) = &doc.parent_id {
+                    children_map.entry(parent_id.clone())
+                        .or_insert_with(Vec::new)
+                        .push(doc_id.clone());
+                } else {
                     root_docs.push(doc_id.clone());
                 }
-                
-                doc_map.insert(doc_id.clone(), (node, doc.parent_id.clone()));
             }
         }
 
-        // 构建树结构
-        let mut tree_map = std::collections::HashMap::new();
-        for (doc_id, (node, parent_id)) in doc_map {
-            if parent_id.is_none() {
-                tree_map.insert(doc_id, node);
-            } else if let Some(parent_id_str) = parent_id {
-                // parent_id_str 应该是完整的格式，直接使用
-                tree_map.entry(parent_id_str.clone())
-                    .or_insert_with(|| DocumentTreeNode {
-                        id: parent_id_str.clone(),
-                        title: "Unknown".to_string(),
-                        slug: "unknown".to_string(),
-                        is_public: false,
-                        order_index: 0,
-                        children: Vec::new(),
-                    })
-                    .children.push(node);
+        // 第二次遍历：构建树结构
+        fn build_tree_recursive(
+            doc_id: &str,
+            doc_map: &mut std::collections::HashMap<String, DocumentTreeNode>,
+            children_map: &std::collections::HashMap<String, Vec<String>>,
+        ) -> Option<DocumentTreeNode> {
+            if let Some(mut node) = doc_map.remove(doc_id) {
+                // 递归构建子节点
+                if let Some(child_ids) = children_map.get(doc_id) {
+                    for child_id in child_ids {
+                        if let Some(child_node) = build_tree_recursive(child_id, doc_map, children_map) {
+                            node.children.push(child_node);
+                        }
+                    }
+                    // 按order_index排序子节点
+                    node.children.sort_by_key(|child| child.order_index);
+                }
+                Some(node)
+            } else {
+                None
             }
         }
 
-        // 返回根节点
+        // 构建最终的树结构
         let mut result = Vec::new();
-        for root_id in root_docs {
-            if let Some(node) = tree_map.remove(&root_id) {
-                result.push(node);
+        for root_id in &root_docs {
+            if let Some(root_node) = build_tree_recursive(root_id, &mut doc_map, &children_map) {
+                result.push(root_node);
             }
         }
+        
+        // 按order_index排序根节点
+        result.sort_by_key(|node| node.order_index);
 
         tracing::debug!("Returning {} root documents in tree", result.len());
         Ok(result)
