@@ -24,6 +24,7 @@ use crate::{
         space_member::SpaceMemberService,
         documents::DocumentService,
         comments::CommentService,
+        publication::PublicationService,
         search::SearchService,
         versions::VersionService,
         tags::TagService,
@@ -43,6 +44,7 @@ pub struct AppState {
     pub tag_service: Arc<TagService>,
     pub document_service: Arc<DocumentService>,
     pub comment_service: Arc<CommentService>,
+    pub publication_service: Arc<PublicationService>,
     pub search_service: Arc<SearchService>,
     pub version_service: Arc<VersionService>,
 }
@@ -100,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
         markdown_processor.clone(),
     ).with_search_service(search_service.clone()).with_version_service(version_service.clone()));
     let comment_service = Arc::new(CommentService::new(shared_db.clone(), auth_service.clone()));
+    let publication_service = Arc::new(PublicationService::new(shared_db.clone()));
 
     // 启动缓存清理任务
     let cleanup_auth = auth_service.clone();
@@ -122,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         tag_service: tag_service.clone(),
         document_service: document_service.clone(),
         comment_service: comment_service.clone(),
+        publication_service: publication_service.clone(),
         search_service: search_service.clone(),
         version_service: version_service.clone(),
     };
@@ -135,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/docs/documents", routes::documents::router())
         .nest("/api/docs/comments", routes::comments::router())
         .nest("/api/docs/notifications", routes::notifications::router())
+        .nest("/api/docs/publications", routes::publication::router())
         .nest("/api/docs/search", routes::search::router())
         .nest("/api/docs/stats", routes::stats::router())
         .nest("/api/docs/versions", routes::versions::router())

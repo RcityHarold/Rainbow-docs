@@ -255,13 +255,17 @@ impl SpaceService {
 
     /// 根据ID获取空间详情
     pub async fn get_space_by_id(&self, id: &str, user: Option<&User>) -> Result<SpaceResponse> {
+        let query_id = format!("space:{}", id);
+        info!("get_space_by_id: searching for id = {}", query_id);
+        
         let space_db: Option<crate::models::space::SpaceDb> = self.db.client
-            .query("SELECT * FROM space WHERE id = $id AND is_deleted = false")
-            .bind(("id", format!("space:{}", id)))
+            .query("SELECT * FROM $id WHERE is_deleted = false")
+            .bind(("id", Thing::from(("space", id))))
             .await
             .map_err(|e| AppError::Database(e))?
             .take(0)?;
 
+        info!("get_space_by_id: query result = {:?}", space_db.is_some());
         let space_db = space_db.ok_or_else(|| AppError::NotFound("Space not found".to_string()))?;
         let space: Space = space_db.into();
 

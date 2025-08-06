@@ -8,3 +8,4 @@ pub mod tag;
 pub mod search;
 pub mod file;
 pub mod notification;
+pub mod publication;

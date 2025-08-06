@@ -9,3 +9,4 @@ pub mod space_member;
 pub mod tags;
 pub mod versions;
 pub mod notification;
+pub mod publication;
