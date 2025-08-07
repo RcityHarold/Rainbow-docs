@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         use crate::utils::installer::InstallationChecker;
         if let Ok(should_install) = InstallationChecker::should_show_installer() {
             if should_install {
-                info!("System not installed, enabling installer routes");
+                info!("System not installed, enabling installer mode");
                 return start_installer_mode().await;
             }
         }
@@ -75,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
     let config = Config::from_env()?;
 
-    // 初始化数据库连接
+    // 初始化数据库连接（只在非安装模式下）
     let db = Database::new(&config).await?;
     db.verify_connection().await?;
     
