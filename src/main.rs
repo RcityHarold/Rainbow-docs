@@ -63,9 +63,60 @@ async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
     let config = Config::from_env()?;
 
-    // 初始化数据库连接
-    let db = Database::new(&config).await?;
-    db.verify_connection().await?;
+    // 检查是否需要跳过数据库连接（安装模式且未安装）
+    #[cfg(feature = "installer")]
+    {
+        use crate::utils::installer::InstallationChecker;
+        if let Ok(should_install) = InstallationChecker::should_show_installer() {
+            if should_install {
+                info!("System not installed, starting in installer-only mode");
+                return start_installer_only_mode(config).await;
+            }
+        }
+    }
+
+    // 初始化数据库连接（已安装或非安装模式）
+    // 如果数据库连接失败，尝试自动启动数据库
+    let db = match Database::new(&config).await {
+        Ok(db) => {
+            match db.verify_connection().await {
+                Ok(_) => {
+                    info!("Database connection established successfully");
+                    db
+                }
+                Err(e) => {
+                    warn!("Database connection failed: {}", e);
+                    info!("Attempting to auto-start database...");
+                    
+                    // 尝试自动启动数据库
+                    if let Err(start_err) = auto_start_database(&config).await {
+                        return Err(anyhow::anyhow!("Failed to auto-start database: {}. Original error: {}", start_err, e));
+                    }
+                    
+                    // 重新尝试连接
+                    let db = Database::new(&config).await?;
+                    db.verify_connection().await?;
+                    info!("Database auto-started and connected successfully");
+                    db
+                }
+            }
+        }
+        Err(e) => {
+            warn!("Failed to create database connection: {}", e);
+            info!("Attempting to auto-start database...");
+            
+            // 尝试自动启动数据库
+            if let Err(start_err) = auto_start_database(&config).await {
+                return Err(anyhow::anyhow!("Failed to auto-start database: {}. Original error: {}", start_err, e));
+            }
+            
+            // 重新尝试连接
+            let db = Database::new(&config).await?;
+            db.verify_connection().await?;
+            info!("Database auto-started and connected successfully");
+            db
+        }
+    };
     
     info!("Database connection established. Please ensure database schema is initialized with docs_schema.sql");
 
@@ -157,6 +208,87 @@ async fn main() -> anyhow::Result<()> {
         .serve(app.into_make_service())
         .await?;
 
+    Ok(())
+}
+
+// 自动启动数据库的函数
+async fn auto_start_database(config: &Config) -> anyhow::Result<()> {
+    use std::process::Command;
+    use std::fs;
+    use std::path::Path;
+    
+    info!("Auto-starting SurrealDB database service...");
+    
+    // 创建数据目录（如果不存在）
+    let data_dir = "./data";
+    if !Path::new(data_dir).exists() {
+        fs::create_dir_all(data_dir)
+            .map_err(|e| anyhow::anyhow!("Failed to create data directory: {}", e))?;
+    }
+    
+    // 构建数据库文件路径
+    let db_file = format!("{}/rainbow.db", data_dir);
+    
+    // 从配置中读取数据库认证信息
+    let database_user = config.database.user.clone();
+    let database_pass = config.database.pass.clone();
+    let database_url = config.database.url.clone();
+    
+    // 构建启动命令
+    let mut cmd = Command::new("surreal");
+    cmd.arg("start")
+       .arg("--auth")
+       .arg("--user").arg(&database_user)
+       .arg("--pass").arg(&database_pass)
+       .arg("--bind").arg(&database_url)
+       .arg(format!("file://{}", db_file));
+    
+    // 在后台启动数据库
+    info!("Executing: surreal start --auth --user {} --pass *** --bind {} file://{}", 
+           database_user, database_url, db_file);
+    
+    let child = cmd.spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to start SurrealDB: {}. Please make sure SurrealDB is installed.", e))?;
+    
+    // 保存进程ID
+    let pid = child.id();
+    fs::write(".surreal_pid", pid.to_string())
+        .map_err(|e| anyhow::anyhow!("Failed to save database PID: {}", e))?;
+    
+    info!("SurrealDB process started (PID: {})", pid);
+    
+    // 等待数据库启动
+    info!("Waiting for database service to be ready...");
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    
+    info!("Database service should be ready now");
+    Ok(())
+}
+
+#[cfg(feature = "installer")]
+async fn start_installer_only_mode(config: Config) -> anyhow::Result<()> {
+    use crate::routes::installer::installer_routes;
+    
+    info!("Starting installer-only mode (no database required)");
+    
+    // 创建仅包含安装路由的应用
+    let app = Router::new()
+        .nest("/api/install", installer_routes())
+        .layer(Extension(config))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        );
+    
+    // 启动服务器
+    let addr = "0.0.0.0:3000";
+    info!("Rainbow-Docs installer-only mode listening on {}", addr);
+    axum::Server::bind(&addr.parse()?)
+        .serve(app.into_make_service())
+        .await?;
+    
     Ok(())
 }
 
