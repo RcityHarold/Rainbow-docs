@@ -13,7 +13,6 @@
 
 ### 🔐 权限系统
 - **集成模式**: 与 Rainbow-Auth 完全集成，使用企业级 RBAC 权限控制
-- **独立模式**: 可独立运行，内置基础用户管理
 - **多租户支持**: 完整的空间成员管理和邀请系统
 - **细粒度权限**: 支持空间级别和文档级别的权限控制
 - **角色管理**: 支持多种角色：所有者、管理员、编辑者、成员、阅读者
@@ -66,7 +65,7 @@
 ### 环境要求
 - Rust 1.87.0 或更高版本
 - SurrealDB
-- Rainbow-Auth (集成模式，可选)
+- Rainbow-Auth
 - 足够的磁盘空间用于文件存储
 
 ## 🚀 安装和使用
@@ -249,9 +248,6 @@ JWT_SECRET=your-jwt-secret
 UPLOAD_DIR=./uploads
 MAX_FILE_SIZE=10485760
 ```
-
-### 独立模式
-独立运行，使用内置用户系统：
 
 ```env
 RAINBOW_AUTH_INTEGRATION=false
@@ -1571,27 +1567,6 @@ src/
 3. 在 `routes/` 中添加 API 端点
 4. 更新数据库 schema
 
-### 数据库Schema更新
-
-如需应用新的多租户权限系统，请执行以下数据库Schema更新：
-
-```sql
--- 连接到 SurrealDB
-surreal sql --conn http://localhost:8000 --user root --pass root --ns docs --db main
-
--- 应用新的空间成员和邀请表
-```
-
-然后复制并执行 `schemas/space_member_schema.sql` 中的内容，该文件包含：
-
-1. **空间成员表** (`space_member`) - 管理用户在空间中的成员关系
-2. **空间邀请表** (`space_invitation`) - 管理邀请流程
-3. **相关索引** - 优化查询性能
-
-**重要说明:**
-- 新的权限系统向后兼容，现有空间所有者权限不受影响
-- 升级后，空间所有者可以开始邀请成员并分配权限
-- 公开空间的访问行为保持不变
 
 ## 部署指南
 

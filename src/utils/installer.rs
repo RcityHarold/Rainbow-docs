@@ -86,6 +86,8 @@ pub mod wizard {
     #[derive(Debug, Deserialize, Serialize)]
     pub struct InstallConfig {
         pub database_url: String,
+        pub database_username: String,  // 新增：数据库用户名
+        pub database_password: String,  // 新增：数据库密码
         pub database_namespace_auth: String,
         pub database_name_auth: String,
         pub database_namespace_docs: String,
@@ -144,12 +146,63 @@ pub mod wizard {
             ]
         }
         
+        async fn start_surreal_database(config: &InstallConfig) -> Result<()> {
+            use std::process::Command;
+            use std::fs;
+            use std::path::Path;
+            
+            println!("正在启动 SurrealDB 数据库服务...");
+            
+            // 创建数据目录（如果不存在）
+            let data_dir = "./data";
+            if !Path::new(data_dir).exists() {
+                fs::create_dir_all(data_dir)
+                    .map_err(|e| anyhow::anyhow!("Failed to create data directory: {}", e))?;
+            }
+            
+            // 构建数据库文件路径
+            let db_file = format!("{}/rainbow.db", data_dir);
+            
+            // 构建启动命令
+            let mut cmd = Command::new("surreal");
+            cmd.arg("start")
+               .arg("--auth")
+               .arg("--user").arg(&config.database_username)
+               .arg("--pass").arg(&config.database_password)
+               .arg("--bind").arg(&config.database_url)
+               .arg(format!("file://{}", db_file));
+            
+            // 在后台启动数据库
+            println!("执行命令: surreal start --auth --user {} --pass *** --bind {} file://{}", 
+                     config.database_username, config.database_url, db_file);
+            
+            let child = cmd.spawn()
+                .map_err(|e| anyhow::anyhow!("Failed to start SurrealDB: {}. Please make sure SurrealDB is installed.", e))?;
+            
+            // 保存进程ID
+            let pid = child.id();
+            fs::write(".surreal_pid", pid.to_string())
+                .map_err(|e| anyhow::anyhow!("Failed to save database PID: {}", e))?;
+            
+            println!("SurrealDB 进程已启动 (PID: {})", pid);
+            
+            // 等待数据库启动
+            println!("等待数据库服务就绪...");
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            
+            println!("数据库服务启动成功！");
+            Ok(())
+        }
+        
         pub async fn perform_installation(config: InstallConfig) -> Result<()> {
             use std::fs;
             use std::path::Path;
             use chrono::Utc;
             
             println!("开始安装过程...");
+            
+            // 1. 启动数据库服务
+            start_surreal_database(&config).await?;
             
             // 1. 验证数据库连接
             println!("验证数据库连接...");
@@ -161,6 +214,8 @@ pub mod wizard {
             let docs_env_content = format!(
                 r#"# Rainbow-Docs 配置
 DATABASE_URL={}
+DATABASE_USER={}
+DATABASE_PASS={}
 DATABASE_NAMESPACE={}
 DATABASE_NAME={}
 JWT_SECRET={}
@@ -187,6 +242,8 @@ ENABLE_COMMENTS=true
 ENABLE_VERSIONING=true
 "#,
                 config.database_url,
+                config.database_username,
+                config.database_password,
                 config.database_namespace_docs,
                 config.database_name_docs,
                 config.jwt_secret,
@@ -208,6 +265,8 @@ ENABLE_VERSIONING=true
             // 解析现有配置
             let mut auth_config_lines: Vec<String> = Vec::new();
             let mut found_database_url = false;
+            let mut found_database_user = false;
+            let mut found_database_pass = false;
             let mut found_database_namespace = false;
             let mut found_database_name = false;
             let mut found_jwt_secret = false;
@@ -217,6 +276,12 @@ ENABLE_VERSIONING=true
                 if line.starts_with("DATABASE_URL=") {
                     auth_config_lines.push(format!("DATABASE_URL={}", config.database_url));
                     found_database_url = true;
+                } else if line.starts_with("DATABASE_USER=") {
+                    auth_config_lines.push(format!("DATABASE_USER={}", config.database_username));
+                    found_database_user = true;
+                } else if line.starts_with("DATABASE_PASS=") {
+                    auth_config_lines.push(format!("DATABASE_PASS={}", config.database_password));
+                    found_database_pass = true;
                 } else if line.starts_with("DATABASE_NAMESPACE=") {
                     auth_config_lines.push(format!("DATABASE_NAMESPACE={}", config.database_namespace_auth));
                     found_database_namespace = true;
@@ -234,6 +299,12 @@ ENABLE_VERSIONING=true
             // 添加缺失的配置项
             if !found_database_url {
                 auth_config_lines.push(format!("DATABASE_URL={}", config.database_url));
+            }
+            if !found_database_user {
+                auth_config_lines.push(format!("DATABASE_USER={}", config.database_username));
+            }
+            if !found_database_pass {
+                auth_config_lines.push(format!("DATABASE_PASS={}", config.database_password));
             }
             if !found_database_namespace {
                 auth_config_lines.push(format!("DATABASE_NAMESPACE={}", config.database_namespace_auth));
@@ -288,12 +359,12 @@ ENABLE_VERSIONING=true
             
             println!("数据库连接成功，正在认证...");
             
-            // 认证 - 添加短超时
+            // 认证 - 使用用户提供的凭据
             tokio::time::timeout(
                 std::time::Duration::from_secs(10),
                 client.signin(Root {
-                    username: "root",
-                    password: "root",
+                    username: &config.database_username,
+                    password: &config.database_password,
                 })
             ).await
                 .map_err(|_| anyhow::anyhow!("Database authentication timeout after 10 seconds"))?
