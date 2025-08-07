@@ -5,7 +5,7 @@ use axum::{
 };
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use tracing::info;
+use tracing::{info, warn};
 use tokio::time::{interval, Duration};
 
 mod routes;
