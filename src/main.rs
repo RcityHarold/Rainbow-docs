@@ -63,19 +63,7 @@ async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
     let config = Config::from_env()?;
 
-    // 检查是否需要显示安装界面
-    #[cfg(feature = "installer")]
-    {
-        use crate::utils::installer::InstallationChecker;
-        if let Ok(should_install) = InstallationChecker::should_show_installer() {
-            if should_install {
-                info!("System not installed, enabling installer mode");
-                return start_installer_mode(config).await;
-            }
-        }
-    }
-
-    // 初始化数据库连接（已安装状态）
+    // 初始化数据库连接
     let db = Database::new(&config).await?;
     db.verify_connection().await?;
     
@@ -145,9 +133,10 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/docs/versions", routes::versions::router())
         .with_state(Arc::new(app_state));
 
+    // 如果是安装模式，额外添加安装路由
     #[cfg(feature = "installer")]
     {
-        app = app.nest("/api/install", routes::installer::installer_routes().with_state(()));
+        app = app.nest("/api/install", routes::installer::installer_routes());
     }
 
     let app = app
@@ -171,110 +160,3 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "installer")]
-async fn start_installer_mode(config: Config) -> anyhow::Result<()> {
-    use crate::routes::installer::installer_routes;
-    use std::sync::Arc;
-    
-    info!("Starting in installer mode with dynamic routing...");
-    
-    // 创建基础的安装路由
-    let mut app = Router::new()
-        .nest("/api/install", installer_routes());
-    
-    // 检查安装状态，如果已安装则同时提供业务路由
-    use crate::utils::installer::InstallationChecker;
-    if let Ok(status) = InstallationChecker::check_installation_status() {
-        if status.is_installed {
-            info!("System already installed, enabling full API routes...");
-            
-            // 尝试初始化数据库连接和业务服务
-            match Database::new(&config).await {
-                Ok(db) => {
-                    match db.verify_connection().await {
-                        Ok(_) => {
-                            info!("Database connection established, adding business routes");
-                            
-                            // 创建业务服务
-                            let shared_db = Arc::new(db.clone());
-                            let auth_service = Arc::new(AuthService::new(config.clone()));
-                            let space_service = Arc::new(SpaceService::new(shared_db.clone()));
-                            let space_member_service = Arc::new(SpaceMemberService::new(shared_db.clone(), config.clone()));
-                            let file_upload_service = Arc::new(FileUploadService::new(shared_db.clone(), auth_service.clone()));
-                            let tag_service = Arc::new(TagService::new(shared_db.clone(), auth_service.clone()));
-                            
-                            let markdown_processor = Arc::new(MarkdownProcessor::new());
-                            let search_service = Arc::new(SearchService::new(shared_db.clone(), auth_service.clone()));
-                            let version_service = Arc::new(VersionService::new(shared_db.clone(), auth_service.clone()));
-                            let document_service = Arc::new(DocumentService::new(
-                                shared_db.clone(),
-                                auth_service.clone(),
-                                markdown_processor.clone(),
-                            ).with_search_service(search_service.clone()).with_version_service(version_service.clone()));
-                            let comment_service = Arc::new(CommentService::new(shared_db.clone(), auth_service.clone()));
-                            let publication_service = Arc::new(PublicationService::new(shared_db.clone()));
-                            
-                            // 创建 app state
-                            let app_state = AppState {
-                                db: shared_db.clone(),
-                                config: config.clone(),
-                                auth_service: auth_service.clone(),
-                                space_service: space_service.clone(),
-                                space_member_service: space_member_service.clone(),
-                                file_upload_service: file_upload_service.clone(),
-                                tag_service: tag_service.clone(),
-                                document_service: document_service.clone(),
-                                comment_service: comment_service.clone(),
-                                publication_service: publication_service.clone(),
-                                search_service: search_service.clone(),
-                                version_service: version_service.clone(),
-                            };
-                            
-                            // 添加业务路由
-                            app = app
-                                .nest("/api/docs/spaces", routes::spaces::router())
-                                .nest("/api/docs/spaces", routes::space_members::router())
-                                .nest("/api/docs/files", routes::files::router())
-                                .nest("/api/docs/tags", routes::tags::router())
-                                .nest("/api/docs/documents", routes::documents::router())
-                                .nest("/api/docs/comments", routes::comments::router())
-                                .nest("/api/docs/notifications", routes::notifications::router())
-                                .nest("/api/docs/publications", routes::publication::router())
-                                .nest("/api/docs/search", routes::search::router())
-                                .nest("/api/docs/stats", routes::stats::router())
-                                .nest("/api/docs/versions", routes::versions::router())
-                                .with_state(Arc::new(app_state))
-                                .layer(Extension(shared_db))
-                                .layer(Extension(auth_service.clone()));
-                        }
-                        Err(e) => {
-                            warn!("Database connection failed: {}, only providing installer routes", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to initialize database: {}, only providing installer routes", e);
-                }
-            }
-        } else {
-            info!("System not installed, only providing installer routes");
-        }
-    }
-    
-    // 添加通用层
-    let app = app.layer(
-        CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any),
-    );
-    
-    // 启动服务器
-    let addr = "0.0.0.0:3000";
-    info!("Rainbow-Docs server listening on {}", addr);
-    axum::Server::bind(&addr.parse()?)
-        .serve(app.into_make_service())
-        .await?;
-    
-    Ok(())
-}
