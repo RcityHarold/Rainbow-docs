@@ -146,11 +146,15 @@ pub mod wizard {
             ]
         }
         
-        async fn start_surreal_database(config: &InstallConfig) -> Result<()> {
-            use std::process::Command;
+        pub async fn perform_installation(config: InstallConfig) -> Result<()> {
             use std::fs;
             use std::path::Path;
+            use chrono::Utc;
+            use std::process::Command;
             
+            println!("开始安装过程...");
+            
+            // 1. 启动数据库服务
             println!("正在启动 SurrealDB 数据库服务...");
             
             // 创建数据目录（如果不存在）
@@ -191,18 +195,6 @@ pub mod wizard {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             
             println!("数据库服务启动成功！");
-            Ok(())
-        }
-        
-        pub async fn perform_installation(config: InstallConfig) -> Result<()> {
-            use std::fs;
-            use std::path::Path;
-            use chrono::Utc;
-            
-            println!("开始安装过程...");
-            
-            // 1. 启动数据库服务
-            start_surreal_database(&config).await?;
             
             // 1. 验证数据库连接
             println!("验证数据库连接...");
