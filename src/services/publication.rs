@@ -697,7 +697,7 @@ impl PublicationService {
         total_views: u64,
     ) -> Result<PublicationResponse> {
         // 使用前端URL来生成预览和公开访问链接
-        let frontend_url = std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://129.226.169.63:5173".to_string());
+        let frontend_url = std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://129.226.169.63:4173".to_string());
         
         // 先调用方法获取URL
         let public_url = publication.get_public_url(&frontend_url);
