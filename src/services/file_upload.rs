@@ -331,7 +331,7 @@ impl FileUploadService {
         let count_sql = sql.replace("SELECT *", "SELECT count()");
         let mut query = self.db.client.query(count_sql);
         for (key, value) in &params {
-            query = query.bind((key, value));
+            query = query.bind((*key, value));
         }
         let total_count: Option<i64> = query
             .await

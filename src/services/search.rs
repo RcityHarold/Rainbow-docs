@@ -23,8 +23,8 @@ impl SearchService {
     }
 
     pub async fn create_or_update_index(&self, index: SearchIndex) -> Result<(), ApiError> {
-        let _: Option<SearchIndex> = self.db.client
-            .create(("search_index", index.document_id.to_string()))
+        let created: Vec<SearchIndex> = self.db.client
+            .create("search_index")
             .content(index)
             .await
             .map_err(|e| ApiError::Database(e))?;

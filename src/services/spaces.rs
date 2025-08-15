@@ -55,24 +55,21 @@ impl SpaceService {
         }
 
         // 保存到数据库
-        let created_spaces_db: Vec<crate::models::space::SpaceDb> = self.db.client
+        let created_spaces: Vec<Space> = self.db.client
             .create("space")
-            .content(&space)
+            .content(space)
             .await
             .map_err(|e| {
                 error!("Failed to create space: {}", e);
                 AppError::Database(e)
             })?;
 
-        let created_space_db = created_spaces_db.into_iter().next();
+        let created_space = created_spaces.into_iter().next();
 
-        let created_space_db = created_space_db.ok_or_else(|| {
+        let created_space = created_space.ok_or_else(|| {
             error!("Failed to get created space from database");
             AppError::Internal(anyhow::anyhow!("Failed to create space"))
         })?;
-
-        // 转换为 Space 类型
-        let created_space: Space = created_space_db.into();
 
         info!("Created new space: {} by user: {}", request.slug, user.id);
 

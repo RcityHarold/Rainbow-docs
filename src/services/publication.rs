@@ -67,17 +67,15 @@ impl PublicationService {
         };
 
         // 保存到数据库
-        let created: Vec<SpacePublicationDb> = self.db.client
+        let created: Vec<SpacePublication> = self.db.client
             .create("space_publication")
-            .content(&publication)
+            .content(publication)
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
-        let created_publication_db = created.into_iter()
+        let created_publication = created.into_iter()
             .next()
             .ok_or_else(|| ApiError::InternalServerError("Failed to create publication".to_string()))?;
-            
-        let created_publication: SpacePublication = created_publication_db.into();
 
         let publication_id = created_publication.id.as_ref()
             .ok_or_else(|| ApiError::InternalServerError("Publication ID is missing".to_string()))?;
@@ -529,9 +527,9 @@ impl PublicationService {
                     created_at: None,  // 让数据库使用默认值
                 };
 
-                let _: Vec<PublicationDocumentDb> = self.db.client
+                let _: Vec<PublicationDocument> = self.db.client
                     .create("publication_document")
-                    .content(&snapshot)
+                    .content(snapshot)
                     .await
                     .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
             }
@@ -571,9 +569,9 @@ impl PublicationService {
             published_at: None,  // 让数据库使用默认值
         };
 
-        let _: Vec<PublicationHistoryDb> = self.db.client
+        let _: Vec<PublicationHistory> = self.db.client
             .create("publication_history")
-            .content(&history)
+            .content(history)
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
@@ -594,9 +592,9 @@ impl PublicationService {
             updated_at: None,  // 让数据库使用默认值
         };
 
-        let _: Vec<PublicationAnalyticsDb> = self.db.client
+        let _: Vec<PublicationAnalytics> = self.db.client
             .create("publication_analytics")
-            .content(&analytics)
+            .content(analytics)
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 

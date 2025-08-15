@@ -1,2 +1,4 @@
 target
 .env
+.rainbow_docs_installed
+config

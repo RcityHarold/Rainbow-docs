@@ -155,7 +155,7 @@ pub struct SpaceMemberResponse {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpaceInvitationDb {
     pub id: Option<Thing>,
     pub space_id: Thing,
