@@ -9,6 +9,7 @@ pub mod space_members;
 pub mod stats;
 pub mod tags;
 pub mod versions;
+pub mod vectors;
 
 #[cfg(feature = "installer")]
 pub mod installer;

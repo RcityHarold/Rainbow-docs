@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use axum::{
-    routing::Router,
+    routing::{Router, post, get, delete},
     Extension,
 };
 use tower_http::cors::{Any, CorsLayer};
@@ -14,9 +14,11 @@ mod services;
 mod config;
 mod error;
 mod utils;
+mod state;
 
 use crate::{
     config::Config,
+    state::AppState,
     services::{
         database::Database,
         auth::AuthService,
@@ -32,22 +34,6 @@ use crate::{
     },
     utils::markdown::MarkdownProcessor,
 };
-
-#[derive(Clone)]
-pub struct AppState {
-    pub db: Arc<Database>,
-    pub config: Config,
-    pub auth_service: Arc<AuthService>,
-    pub space_service: Arc<SpaceService>,
-    pub space_member_service: Arc<SpaceMemberService>,
-    pub file_upload_service: Arc<FileUploadService>,
-    pub tag_service: Arc<TagService>,
-    pub document_service: Arc<DocumentService>,
-    pub comment_service: Arc<CommentService>,
-    pub publication_service: Arc<PublicationService>,
-    pub search_service: Arc<SearchService>,
-    pub version_service: Arc<VersionService>,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -182,6 +168,7 @@ async fn main() -> anyhow::Result<()> {
         .nest("/api/docs/search", routes::search::router())
         .nest("/api/docs/stats", routes::stats::router())
         .nest("/api/docs/versions", routes::versions::router())
+        .nest("/api/docs", vectors_router())
         .with_state(Arc::new(app_state));
 
     // 如果是安装模式，额外添加安装路由
@@ -263,6 +250,16 @@ async fn auto_start_database(config: &Config) -> anyhow::Result<()> {
     
     info!("Database service should be ready now");
     Ok(())
+}
+
+fn vectors_router() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/documents/:id/vectors", post(routes::vectors::store_document_vector))
+        .route("/documents/:id/vectors", get(routes::vectors::get_document_vectors))
+        .route("/documents/:id/vectors/:vector_id", delete(routes::vectors::delete_document_vector))
+        .route("/search/vector", post(routes::vectors::vector_search))
+        .route("/documents/batch", post(routes::vectors::batch_get_documents))
+        .route("/vectors/batch", post(routes::vectors::batch_update_vectors))
 }
 
 #[cfg(feature = "installer")]

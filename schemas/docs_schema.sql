@@ -510,3 +510,25 @@ INSERT INTO tag (name, slug, description, color, space_id, created_by) VALUES
 
 -- 设置初始使用统计
 UPDATE tag SET usage_count = 0 WHERE created_by = "system";
+
+-- =====================================
+-- 向量存储系统
+-- =====================================
+
+-- 文档向量存储表
+-- 用于存储文档的向量嵌入，支持语义搜索
+DEFINE TABLE document_vector SCHEMAFULL;
+DEFINE FIELD id ON document_vector TYPE record(document_vector);
+DEFINE FIELD document_id ON document_vector TYPE record(document) ASSERT $value != NONE;
+DEFINE FIELD space_id ON document_vector TYPE record(space) ASSERT $value != NONE;
+DEFINE FIELD embedding ON document_vector TYPE array<float> ASSERT $value != NONE;
+DEFINE FIELD embedding_model ON document_vector TYPE string;
+DEFINE FIELD dimension ON document_vector TYPE int ASSERT $value > 0;
+DEFINE FIELD metadata ON document_vector TYPE object DEFAULT {};
+DEFINE FIELD created_at ON document_vector TYPE datetime DEFAULT time::now();
+DEFINE FIELD updated_at ON document_vector TYPE datetime DEFAULT time::now();
+
+-- 向量表索引
+DEFINE INDEX idx_document_vector_doc ON document_vector FIELDS document_id;
+DEFINE INDEX idx_document_vector_space ON document_vector FIELDS space_id;
+DEFINE INDEX idx_document_vector_created ON document_vector FIELDS created_at;
