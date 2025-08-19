@@ -7,7 +7,7 @@ use crate::{
     error::ApiError,
     models::document::{Document, CreateDocumentRequest, UpdateDocumentRequest, DocumentTreeNode, DocumentMetadata},
     models::version::{CreateVersionRequest, VersionChangeType},
-    services::{auth::AuthService, search::SearchService, versions::VersionService, database::Database},
+    services::{auth::AuthService, search::SearchService, versions::VersionService, database::Database, vector::VectorService, embedding::EmbeddingService},
     utils::markdown::MarkdownProcessor,
 };
 
@@ -18,6 +18,8 @@ pub struct DocumentService {
     markdown_processor: Arc<MarkdownProcessor>,
     search_service: Option<Arc<SearchService>>,
     version_service: Option<Arc<VersionService>>,
+    vector_service: Option<Arc<VectorService>>,
+    embedding_service: Option<Arc<EmbeddingService>>,
 }
 
 impl DocumentService {
@@ -32,6 +34,8 @@ impl DocumentService {
             markdown_processor,
             search_service: None,
             version_service: None,
+            vector_service: None,
+            embedding_service: None,
         }
     }
 
@@ -42,6 +46,16 @@ impl DocumentService {
 
     pub fn with_version_service(mut self, version_service: Arc<VersionService>) -> Self {
         self.version_service = Some(version_service);
+        self
+    }
+
+    pub fn with_vector_service(mut self, vector_service: Arc<VectorService>) -> Self {
+        self.vector_service = Some(vector_service);
+        self
+    }
+
+    pub fn with_embedding_service(mut self, embedding_service: Arc<EmbeddingService>) -> Self {
+        self.embedding_service = Some(embedding_service);
         self
     }
 
@@ -271,6 +285,28 @@ impl DocumentService {
             ).await;
         }
 
+        // 生成并存储文档向量
+        if let (Some(vector_service), Some(embedding_service)) = (&self.vector_service, &self.embedding_service) {
+            // 异步生成向量，不阻塞文档创建流程
+            let vector_service = vector_service.clone();
+            let embedding_service = embedding_service.clone();
+            let document_id = created_document.id.as_ref().unwrap().to_string();
+            let content = created_document.content.clone();
+            let title = created_document.title.clone();
+            
+            tokio::spawn(async move {
+                if let Err(e) = Self::generate_and_store_vector(
+                    vector_service, 
+                    embedding_service, 
+                    &document_id, 
+                    &title, 
+                    &content
+                ).await {
+                    tracing::error!("Failed to generate vector for document {}: {}", document_id, e);
+                }
+            });
+        }
+
         Ok(created_document)
     }
 
@@ -292,6 +328,9 @@ impl DocumentService {
         request.validate()?;
 
         let mut document = self.get_document(document_id).await?;
+
+        // 检查是否有内容或标题变化（在移动值之前）
+        let content_changed = request.content.is_some() || request.title.is_some();
 
         if let Some(title) = request.title {
             document.title = title;
@@ -353,6 +392,30 @@ impl DocumentService {
                 editor_id,
                 version_request,
             ).await;
+        }
+
+        // 更新文档向量（仅当内容或标题发生变化时）
+        if content_changed {
+            if let (Some(vector_service), Some(embedding_service)) = (&self.vector_service, &self.embedding_service) {
+                // 异步更新向量，不阻塞文档更新流程
+                let vector_service = vector_service.clone();
+                let embedding_service = embedding_service.clone();
+                let document_id = document_id.to_string();
+                let title = updated_document.title.clone();
+                let content = updated_document.content.clone();
+                
+                tokio::spawn(async move {
+                    if let Err(e) = Self::update_document_vector(
+                        vector_service, 
+                        embedding_service, 
+                        &document_id, 
+                        &title, 
+                        &content
+                    ).await {
+                        tracing::error!("Failed to update vector for document {}: {}", document_id, e);
+                    }
+                });
+            }
         }
 
         Ok(updated_document)
@@ -797,5 +860,86 @@ impl DocumentService {
         }
 
         Ok(())
+    }
+
+    /// 生成并存储文档向量
+    async fn generate_and_store_vector(
+        vector_service: Arc<VectorService>,
+        embedding_service: Arc<EmbeddingService>,
+        document_id: &str,
+        title: &str,
+        content: &str,
+    ) -> Result<(), ApiError> {
+        // 预处理文本：合并标题和内容
+        let full_text = format!("{}\n\n{}", title, content);
+        let processed_text = embedding_service.preprocess_text(&full_text);
+        
+        // 如果文本太长，需要分块处理
+        let text_chunks = embedding_service.chunk_text(&processed_text, 8000); // OpenAI text-embedding-3-small 的限制
+        
+        for (index, chunk) in text_chunks.iter().enumerate() {
+            if chunk.trim().is_empty() {
+                continue;
+            }
+            
+            // 生成向量
+            match embedding_service.generate_embedding(chunk).await {
+                Ok(embedding_response) => {
+                    // 准备向量数据
+                    let vector_data = crate::services::vector::VectorData {
+                        embedding: embedding_response.embedding,
+                        model: embedding_response.model,
+                        dimension: embedding_response.dimension,
+                        metadata: Some(serde_json::json!({
+                            "chunk_index": index,
+                            "total_chunks": text_chunks.len(),
+                            "text_length": chunk.len(),
+                            "token_count": embedding_response.token_count,
+                            "created_at": chrono::Utc::now().to_rfc3339()
+                        })),
+                    };
+                    
+                    // 存储向量
+                    if let Err(e) = vector_service.store_vector(document_id, vector_data).await {
+                        tracing::error!("Failed to store vector for document {} chunk {}: {}", document_id, index, e);
+                        return Err(ApiError::InternalServerError(format!("Failed to store vector: {}", e)));
+                    } else {
+                        tracing::info!("Successfully stored vector for document {} chunk {}", document_id, index);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to generate embedding for document {} chunk {}: {}", document_id, index, e);
+                    return Err(ApiError::InternalServerError(format!("Failed to generate embedding: {}", e)));
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// 更新文档向量（删除旧向量并生成新向量）
+    async fn update_document_vector(
+        vector_service: Arc<VectorService>,
+        embedding_service: Arc<EmbeddingService>,
+        document_id: &str,
+        title: &str,
+        content: &str,
+    ) -> Result<(), ApiError> {
+        // 删除现有向量
+        match vector_service.get_document_vectors(document_id).await {
+            Ok(existing_vectors) => {
+                for vector_info in existing_vectors.vectors {
+                    if let Err(e) = vector_service.delete_vector(&vector_info.vector_id).await {
+                        tracing::warn!("Failed to delete old vector {}: {}", vector_info.vector_id, e);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to get existing vectors for document {}: {}", document_id, e);
+            }
+        }
+        
+        // 生成新向量
+        Self::generate_and_store_vector(vector_service, embedding_service, document_id, title, content).await
     }
 }

@@ -13,6 +13,8 @@ use crate::{
         versions::VersionService,
         tags::TagService,
         file_upload::FileUploadService,
+        vector::VectorService,
+        embedding::EmbeddingService,
     },
 };
 
@@ -30,4 +32,6 @@ pub struct AppState {
     pub publication_service: Arc<PublicationService>,
     pub search_service: Arc<SearchService>,
     pub version_service: Arc<VersionService>,
+    pub vector_service: Arc<VectorService>,
+    pub embedding_service: Arc<EmbeddingService>,
 }

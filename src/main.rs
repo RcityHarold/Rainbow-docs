@@ -31,6 +31,8 @@ use crate::{
         versions::VersionService,
         tags::TagService,
         file_upload::FileUploadService,
+        vector::VectorService,
+        embedding::{EmbeddingService, EmbeddingConfig},
     },
     utils::markdown::MarkdownProcessor,
 };
@@ -121,11 +123,19 @@ async fn main() -> anyhow::Result<()> {
     let markdown_processor = Arc::new(MarkdownProcessor::new());
     let search_service = Arc::new(SearchService::new(shared_db.clone(), auth_service.clone()));
     let version_service = Arc::new(VersionService::new(shared_db.clone(), auth_service.clone()));
+    
+    // 初始化向量服务
+    let vector_service = Arc::new(VectorService::new(shared_db.clone()));
+    let embedding_service = Arc::new(EmbeddingService::from_env());
+    
     let document_service = Arc::new(DocumentService::new(
         shared_db.clone(),
         auth_service.clone(),
         markdown_processor.clone(),
-    ).with_search_service(search_service.clone()).with_version_service(version_service.clone()));
+    ).with_search_service(search_service.clone())
+     .with_version_service(version_service.clone())
+     .with_vector_service(vector_service.clone())
+     .with_embedding_service(embedding_service.clone()));
     let comment_service = Arc::new(CommentService::new(shared_db.clone(), auth_service.clone()));
     let publication_service = Arc::new(PublicationService::new(shared_db.clone()));
 
@@ -153,6 +163,8 @@ async fn main() -> anyhow::Result<()> {
         publication_service: publication_service.clone(),
         search_service: search_service.clone(),
         version_service: version_service.clone(),
+        vector_service: vector_service.clone(),
+        embedding_service: embedding_service.clone(),
     };
 
     // 创建路由

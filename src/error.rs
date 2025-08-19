@@ -167,6 +167,10 @@ impl AppError {
     pub fn internal_server_error(msg: impl Into<String>) -> Self {
         Self::Internal(anyhow::anyhow!(msg.into()))
     }
+    
+    pub fn ExternalServiceError(msg: impl Into<String>) -> Self {
+        Self::External(msg.into())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
