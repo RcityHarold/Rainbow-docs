@@ -292,37 +292,4 @@ impl EmbeddingService {
         content.trim().to_string()
     }
 
-    /// 将长文本分块处理
-    pub fn chunk_text(&self, text: &str, max_tokens: usize) -> Vec<String> {
-        // 简单的基于字符数的分块（实际使用中可能需要更复杂的分词）
-        let max_chars = max_tokens * 4; // 大致估算，1个token约等于4个字符
-        
-        if text.len() <= max_chars {
-            return vec![text.to_string()];
-        }
-        
-        let mut chunks = Vec::new();
-        let mut start = 0;
-        
-        while start < text.len() {
-            let end = (start + max_chars).min(text.len());
-            
-            // 尝试在句号、换行或空格处分割
-            let chunk_end = if end < text.len() {
-                text[start..end]
-                    .rfind('.')
-                    .or_else(|| text[start..end].rfind('\n'))
-                    .or_else(|| text[start..end].rfind(' '))
-                    .map(|pos| start + pos + 1)
-                    .unwrap_or(end)
-            } else {
-                end
-            };
-            
-            chunks.push(text[start..chunk_end].trim().to_string());
-            start = chunk_end;
-        }
-        
-        chunks.into_iter().filter(|chunk| !chunk.trim().is_empty()).collect()
-    }
 }

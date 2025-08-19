@@ -7,7 +7,16 @@ use crate::{
     error::ApiError,
     models::document::{Document, CreateDocumentRequest, UpdateDocumentRequest, DocumentTreeNode, DocumentMetadata},
     models::version::{CreateVersionRequest, VersionChangeType},
-    services::{auth::AuthService, search::SearchService, versions::VersionService, database::Database, vector::VectorService, embedding::EmbeddingService},
+    services::{
+        auth::AuthService, 
+        search::SearchService, 
+        versions::VersionService, 
+        database::Database, 
+        vector::VectorService, 
+        embedding::EmbeddingService,
+        chunking::ChunkingConfig,
+        intelligent_chunker::IntelligentChunker,
+    },
     utils::markdown::MarkdownProcessor,
 };
 
@@ -870,49 +879,87 @@ impl DocumentService {
         title: &str,
         content: &str,
     ) -> Result<(), ApiError> {
-        // 预处理文本：合并标题和内容
-        let full_text = format!("{}\n\n{}", title, content);
-        let processed_text = embedding_service.preprocess_text(&full_text);
+        // 创建智能分块器配置
+        let chunking_config = ChunkingConfig::default();
+        let chunker = IntelligentChunker::new(chunking_config)
+            .map_err(|e| ApiError::InternalServerError(format!("Failed to create chunker: {}", e)))?;
         
-        // 如果文本太长，需要分块处理
-        let text_chunks = embedding_service.chunk_text(&processed_text, 8000); // OpenAI text-embedding-3-small 的限制
+        // 使用智能分块器进行文档分块
+        let chunking_result = chunker.chunk_document(document_id, title, content).await
+            .map_err(|e| ApiError::InternalServerError(format!("Failed to chunk document: {}", e)))?;
         
-        for (index, chunk) in text_chunks.iter().enumerate() {
-            if chunk.trim().is_empty() {
+        tracing::info!("Document {} chunked into {} chunks with strategy {:?}", 
+            document_id, 
+            chunking_result.chunks.len(),
+            chunking_result.statistics.strategy_used
+        );
+        
+        // 预处理并生成向量
+        for chunk in &chunking_result.chunks {
+            if chunk.content.trim().is_empty() {
                 continue;
             }
             
+            let processed_text = embedding_service.preprocess_text(&chunk.content);
+            
             // 生成向量
-            match embedding_service.generate_embedding(chunk).await {
+            match embedding_service.generate_embedding(&processed_text).await {
                 Ok(embedding_response) => {
-                    // 准备向量数据
+                    // 准备向量数据，包含更多的元数据
                     let vector_data = crate::services::vector::VectorData {
                         embedding: embedding_response.embedding,
                         model: embedding_response.model,
                         dimension: embedding_response.dimension,
                         metadata: Some(serde_json::json!({
-                            "chunk_index": index,
-                            "total_chunks": text_chunks.len(),
-                            "text_length": chunk.len(),
+                            "chunk_id": &chunk.id,
+                            "chunk_index": chunk.chunk_index,
+                            "total_chunks": chunk.total_chunks,
+                            "text_length": chunk.text_length,
                             "token_count": embedding_response.token_count,
+                            "content_type": format!("{:?}", chunk.content_type),
+                            "section_path": chunk.section_path,
+                            "section_level": chunk.section_level,
+                            "extraction_method": &chunk.extraction_method,
+                            "quality_score": chunking_result.quality_assessments
+                                .get(chunk.chunk_index)
+                                .map(|qa| qa.overall_score),
                             "created_at": chrono::Utc::now().to_rfc3339()
                         })),
                     };
                     
                     // 存储向量
                     if let Err(e) = vector_service.store_vector(document_id, vector_data).await {
-                        tracing::error!("Failed to store vector for document {} chunk {}: {}", document_id, index, e);
+                        tracing::error!("Failed to store vector for document {} chunk {}: {}", 
+                            document_id, chunk.chunk_index, e);
                         return Err(ApiError::InternalServerError(format!("Failed to store vector: {}", e)));
                     } else {
-                        tracing::info!("Successfully stored vector for document {} chunk {}", document_id, index);
+                        tracing::info!("Successfully stored vector for document {} chunk {} (quality: {:.2})", 
+                            document_id, 
+                            chunk.chunk_index,
+                            chunking_result.quality_assessments
+                                .get(chunk.chunk_index)
+                                .map(|qa| qa.overall_score)
+                                .unwrap_or(0.0)
+                        );
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Failed to generate embedding for document {} chunk {}: {}", document_id, index, e);
+                    tracing::error!("Failed to generate embedding for document {} chunk {}: {}", 
+                        document_id, chunk.chunk_index, e);
                     return Err(ApiError::InternalServerError(format!("Failed to generate embedding: {}", e)));
                 }
             }
         }
+        
+        // 记录分块统计信息
+        tracing::info!(
+            "Document {} vector generation completed: {} chunks, avg size: {:.0}, avg quality: {:.2}, time: {}ms",
+            document_id,
+            chunking_result.statistics.total_chunks,
+            chunking_result.statistics.average_chunk_size,
+            chunking_result.statistics.average_quality_score,
+            chunking_result.statistics.processing_time_ms
+        );
         
         Ok(())
     }
