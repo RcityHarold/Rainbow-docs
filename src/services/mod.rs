@@ -1,13 +1,17 @@
 pub mod auth;
+pub mod cache;
+pub mod cache_strategy;
 pub mod chunking;
 pub mod chunking_tests;
 pub mod comments;
+pub mod concurrent_chunking;
 pub mod database;
 pub mod documents;
 pub mod embedding;
 pub mod file_upload;
 pub mod intelligent_chunker;
 pub mod quality_assessor;
+pub mod resource_manager;
 pub mod search;
 pub mod spaces;
 pub mod space_member;

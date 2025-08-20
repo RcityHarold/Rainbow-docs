@@ -16,6 +16,9 @@ mod error;
 mod utils;
 mod state;
 
+#[cfg(feature = "benchmarks")]
+mod benchmarks;
+
 use crate::{
     config::Config,
     state::AppState,
