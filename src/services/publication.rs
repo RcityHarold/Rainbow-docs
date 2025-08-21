@@ -90,33 +90,74 @@ impl PublicationService {
             }
         }
 
-        // 数据已保存，使用已知数据构造响应
+        // 数据已保存，现在需要获取真实的publication ID
+        // 通过slug查询刚创建的publication记录
+        let real_pub_query = "SELECT id, created_at FROM space_publication WHERE slug = $slug ORDER BY created_at DESC LIMIT 1";
+        let mut pub_result = self.db.client
+            .query(real_pub_query)
+            .bind(("slug", &publication.slug))
+            .await
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            
+        let pub_records: Vec<serde_json::Value> = pub_result
+            .take(0)
+            .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+            
+        let real_publication_id = if let Some(record) = pub_records.first() {
+            if let Some(id_obj) = record.get("id") {
+                // 处理 SurrealDB 的 Thing ID 格式
+                if let Some(id_str) = id_obj.as_str() {
+                    id_str.to_string()
+                } else if let Some(id_map) = id_obj.as_object() {
+                    if let (Some(tb), Some(id_val)) = (id_map.get("tb"), id_map.get("id")) {
+                        if let (Some(table), Some(id_inner)) = (tb.as_str(), id_val.as_object()) {
+                            if let Some(actual_id) = id_inner.get("String").and_then(|v| v.as_str()) {
+                                format!("{}:{}", table, actual_id)
+                            } else {
+                                format!("space_publication:{}", publication.slug) // 备用方案
+                            }
+                        } else {
+                            format!("space_publication:{}", publication.slug) // 备用方案
+                        }
+                    } else {
+                        format!("space_publication:{}", publication.slug) // 备用方案
+                    }
+                } else {
+                    format!("space_publication:{}", publication.slug) // 备用方案
+                }
+            } else {
+                format!("space_publication:{}", publication.slug) // 备用方案
+            }
+        } else {
+            format!("space_publication:{}", publication.slug) // 备用方案
+        };
+        
+        info!("Using real_publication_id for document snapshots: {}", real_publication_id);
+        
+        // 构造publication响应对象
         let now = chrono::Utc::now();
         publication.published_at = Some(now);
         publication.updated_at = Some(now);
-        publication.id = Some(format!("space_publication:{}", publication.slug)); // 临时ID
-        
+        publication.id = Some(real_publication_id.clone());
         let created_publication = publication;
-        let publication_id = created_publication.id.as_ref()
-            .ok_or_else(|| ApiError::InternalServerError("Publication ID is missing".to_string()))?;
 
         // 创建文档快照
         let document_count = self.create_document_snapshots(
-            publication_id,
+            &real_publication_id,
             space_id,
             created_publication.include_private_docs,
         ).await?;
 
         // 创建发布历史记录
         self.create_publication_history(
-            publication_id,
+            &real_publication_id,
             new_version as i32,
             publisher_id,
             "Initial publication",
         ).await?;
 
         // 初始化访问统计
-        self.init_analytics(publication_id).await?;
+        self.init_analytics(&real_publication_id).await?;
 
         info!("Created publication {} for space {} with {} documents", 
             created_publication.slug, space_id, document_count);
@@ -349,16 +390,20 @@ impl PublicationService {
         info!("Getting publication tree for publication_id: {}", publication_id);
         
         let query = "SELECT * FROM publication_document 
-            WHERE publication_id = type::thing('space_publication', $publication_id) 
+            WHERE publication_id = $publication_id 
             ORDER BY order_index ASC";
 
-        // 处理 publication_id，去掉前缀
-        let clean_id = publication_id.strip_prefix("space_publication:").unwrap_or(publication_id);
-        info!("Using clean_id for query: {}", clean_id);
+        // 确保 publication_id 有正确的前缀
+        let full_id = if publication_id.starts_with("space_publication:") {
+            publication_id.to_string()
+        } else {
+            format!("space_publication:{}", publication_id)
+        };
+        info!("Using full_id for query: {}", full_id);
 
         let mut result = self.db.client
             .query(query)
-            .bind(("publication_id", clean_id))
+            .bind(("publication_id", full_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
@@ -386,14 +431,19 @@ impl PublicationService {
         doc_slug: &str,
     ) -> Result<PublicationDocument> {
         let query = "SELECT * FROM publication_document 
-            WHERE publication_id = type::thing('space_publication', $publication_id) AND slug = $slug";
+            WHERE publication_id = $publication_id AND slug = $slug";
 
-        let clean_id = publication_id.strip_prefix("space_publication:").unwrap_or(publication_id);
-        info!("get_publication_document using clean_id: {}", clean_id);
+        // 确保 publication_id 有正确的前缀
+        let full_id = if publication_id.starts_with("space_publication:") {
+            publication_id.to_string()
+        } else {
+            format!("space_publication:{}", publication_id)
+        };
+        info!("get_publication_document using full_id: {}", full_id);
 
         let mut result = self.db.client
             .query(query)
-            .bind(("publication_id", clean_id))
+            .bind(("publication_id", full_id))
             .bind(("slug", doc_slug))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
@@ -583,12 +633,17 @@ impl PublicationService {
 
     /// 删除文档快照
     async fn delete_document_snapshots(&self, publication_id: &str) -> Result<()> {
-        let query = "DELETE publication_document WHERE publication_id = type::thing('space_publication', $publication_id)";
+        let query = "DELETE publication_document WHERE publication_id = $publication_id";
         
-        let clean_id = publication_id.strip_prefix("space_publication:").unwrap_or(publication_id);
+        // 确保 publication_id 有正确的前缀
+        let full_id = if publication_id.starts_with("space_publication:") {
+            publication_id.to_string()
+        } else {
+            format!("space_publication:{}", publication_id)
+        };
         self.db.client
             .query(query)
-            .bind(("publication_id", clean_id))
+            .bind(("publication_id", full_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
@@ -724,12 +779,17 @@ impl PublicationService {
     /// 获取文档数量
     async fn get_document_count(&self, publication_id: &str) -> Result<u32> {
         let query = "SELECT count() as total FROM publication_document 
-            WHERE publication_id = type::thing('space_publication', $publication_id) GROUP ALL";
+            WHERE publication_id = $publication_id GROUP ALL";
 
-        let clean_id = publication_id.strip_prefix("space_publication:").unwrap_or(publication_id);
+        // 确保 publication_id 有正确的前缀
+        let full_id = if publication_id.starts_with("space_publication:") {
+            publication_id.to_string()
+        } else {
+            format!("space_publication:{}", publication_id)
+        };
         let mut result = self.db.client
             .query(query)
-            .bind(("publication_id", clean_id))
+            .bind(("publication_id", full_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
