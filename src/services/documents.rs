@@ -90,20 +90,17 @@ impl DocumentService {
         let limit = query.limit.unwrap_or(20);
         let offset = (page - 1) * limit;
 
-        // 使用Thing类型来查询
-        let space_thing = Thing::from(("space", actual_space_id));
-
         // 查询文档列表
         let mut documents_query = self.db.client.query(
             "SELECT * FROM document 
-             WHERE space_id = $space_id 
+             WHERE space_id = type::thing('space', $space_id)
              AND is_deleted = false 
              ORDER BY order_index ASC, created_at DESC 
              LIMIT $limit START $offset"
         );
         
         documents_query = documents_query
-            .bind(("space_id", space_thing.clone()))
+            .bind(("space_id", actual_space_id))
             .bind(("limit", limit))
             .bind(("offset", offset));
 
@@ -111,13 +108,13 @@ impl DocumentService {
         if let Some(search) = &query.search {
             documents_query = self.db.client.query(
                 "SELECT * FROM document 
-                 WHERE space_id = $space_id 
+                 WHERE space_id = type::thing('space', $space_id)
                  AND is_deleted = false 
                  AND (title CONTAINS $search OR content CONTAINS $search)
                  ORDER BY order_index ASC, created_at DESC 
                  LIMIT $limit START $offset"
             )
-            .bind(("space_id", space_thing.clone()))
+            .bind(("space_id", actual_space_id))
             .bind(("search", search))
             .bind(("limit", limit))
             .bind(("offset", offset));
@@ -142,9 +139,9 @@ impl DocumentService {
         // 暂时使用简单的总数计算 - 由于分页问题，暂时查询所有文档获取总数
         let all_docs_query = self.db.client.query(
             "SELECT * FROM document 
-             WHERE space_id = $space_id 
+             WHERE space_id = type::thing('space', $space_id)
              AND is_deleted = false"
-        ).bind(("space_id", space_thing.clone()));
+        ).bind(("space_id", actual_space_id));
 
         let mut all_docs_result = all_docs_query.await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
@@ -484,14 +481,14 @@ impl DocumentService {
     ) -> Result<Vec<Document>, ApiError> {
         let query = "
             SELECT * FROM document 
-            WHERE parent_id = $parent_id 
+            WHERE parent_id = type::thing('document', $parent_id)
             AND is_deleted = false
             ORDER BY order_index ASC, created_at ASC
         ";
 
         let children_db: Vec<crate::models::document::DocumentDb> = self.db.client
             .query(query)
-            .bind(("parent_id", Thing::from(("document", parent_id))))
+            .bind(("parent_id", parent_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?
             .take(0)
@@ -531,17 +528,16 @@ impl DocumentService {
         // 获取空间内所有文档
         let query = "
             SELECT * FROM document 
-            WHERE space_id = $space_id 
+            WHERE space_id = type::thing('space', $space_id)
             AND is_deleted = false
             ORDER BY order_index ASC, created_at ASC
         ";
 
-        let space_thing = Thing::from(("space", actual_space_id));
-        tracing::debug!("Querying with space_thing: {:?}", space_thing);
+        tracing::debug!("Querying with actual_space_id: {}", actual_space_id);
         
         let all_documents_db: Vec<crate::models::document::DocumentDb> = self.db.client
             .query(query)
-            .bind(("space_id", space_thing))
+            .bind(("space_id", actual_space_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?
             .take(0)
@@ -794,13 +790,13 @@ impl DocumentService {
 
         let query = "
             SELECT * FROM document 
-            WHERE id = $id 
+            WHERE id = type::thing('document', $id)
             AND is_deleted = false
         ";
 
         let mut result = self.db.client
             .query(query)
-            .bind(("id", Thing::from(("document", actual_id))))
+            .bind(("id", actual_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
@@ -848,15 +844,15 @@ impl DocumentService {
     async fn verify_parent_document(&self, space_id: &str, parent_id: &str) -> Result<(), ApiError> {
         let query = "
             SELECT id FROM document 
-            WHERE id = $parent_id 
-            AND space_id = $space_id 
+            WHERE id = type::thing('document', $parent_id)
+            AND space_id = type::thing('space', $space_id)
             AND is_deleted = false
         ";
 
         let mut response = self.db.client
             .query(query)
-            .bind(("parent_id", Thing::from(("document", parent_id))))
-            .bind(("space_id", Thing::from(("space", space_id))))
+            .bind(("parent_id", parent_id))
+            .bind(("space_id", space_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
             

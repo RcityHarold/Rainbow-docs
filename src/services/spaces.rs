@@ -272,8 +272,8 @@ impl SpaceService {
         info!("get_space_by_id: searching for id = {}", query_id);
         
         let space_db: Option<crate::models::space::SpaceDb> = self.db.client
-            .query("SELECT * FROM $id WHERE is_deleted = false")
-            .bind(("id", Thing::from(("space", id))))
+            .query("SELECT * FROM space WHERE id = type::thing('space', $id) AND is_deleted = false")
+            .bind(("id", id))
             .await
             .map_err(|e| AppError::Database(e))?
             .take(0)?;

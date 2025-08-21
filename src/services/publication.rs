@@ -472,23 +472,23 @@ impl PublicationService {
         info!("Sample documents from database: {:?}", debug_result);
         
         // 获取要发布的文档
-        // 注意：space_id 在数据库中是 Thing 类型，需要使用 Thing 进行查询
+        // 注意：space_id 在数据库中是 Thing 类型，需要使用 type::thing 进行查询
         let query = if include_private {
             "SELECT * FROM document 
-            WHERE space_id = $space_id AND is_deleted = false 
+            WHERE space_id = type::thing('space', $space_id) AND is_deleted = false 
             ORDER BY order_index ASC, created_at ASC"
         } else {
             "SELECT * FROM document 
-            WHERE space_id = $space_id AND is_deleted = false AND is_public = true 
+            WHERE space_id = type::thing('space', $space_id) AND is_deleted = false AND is_public = true 
             ORDER BY order_index ASC, created_at ASC"
         };
         
         info!("Document query: {}", query);
-        info!("Query binding - space_id: space:{}", clean_space_id);
+        info!("Query binding - space_id: {}", clean_space_id);
 
         let mut result = self.db.client
             .query(query)
-            .bind(("space_id", Thing::from(("space", clean_space_id))))
+            .bind(("space_id", clean_space_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
 
@@ -610,8 +610,8 @@ impl PublicationService {
         info!("Using clean_id: {}", clean_id);
         
         let publications_db: Option<SpacePublicationDb> = self.db.client
-            .query("SELECT * FROM $id WHERE is_deleted = false")
-            .bind(("id", Thing::from(("space_publication", clean_id))))
+            .query("SELECT * FROM space_publication WHERE id = type::thing('space_publication', $id) AND is_deleted = false")
+            .bind(("id", clean_id))
             .await
             .map_err(|e| ApiError::DatabaseError(e.to_string()))?
             .take(0)

@@ -52,32 +52,52 @@ impl SpaceMemberService {
         } else {
             space_id
         };
+        
+        info!("Processing space_id: {} -> actual_space_id: {}", space_id, actual_space_id);
 
         // 检查是否为空间所有者
-        let owner_query = "SELECT owner_id FROM space WHERE id = $space_id";
+        // 使用正确的查询语法
+        let owner_query = "SELECT * FROM space WHERE id = type::thing('space', $space_id)";
+        
+        info!("Querying space with actual_space_id: {}, using query: {}", actual_space_id, owner_query);
+        
         let mut owner_result = self.db.client
             .query(owner_query)
-            .bind(("space_id", Thing::from(("space", actual_space_id))))
+            .bind(("space_id", actual_space_id))
             .await
-            .map_err(|e| AppError::Database(e))?;
+            .map_err(|e| {
+                error!("Failed to query space owner: {}", e);
+                AppError::Database(e)
+            })?;
 
         if let Ok(spaces) = owner_result.take::<Vec<Value>>(0) {
+            info!("Query returned {} records", spaces.len());
             if let Some(space) = spaces.first() {
+                info!("Space record data: {:?}", space);
                 if let Some(owner_id) = space.get("owner_id").and_then(|v| v.as_str()) {
                     let clean_owner_id = clean_user_id_format(owner_id);
+                    info!("Space owner check - space_id: {}, owner_id: {}, clean_owner_id: {}, user_id: {}, clean_user_id: {}", 
+                        actual_space_id, owner_id, clean_owner_id, uid, clean_user_id);
                     if clean_owner_id == clean_user_id {
                         info!("User is space owner, granting access");
                         return Ok(true);
                     }
+                } else {
+                    warn!("Failed to get owner_id from space record. Available fields: {:?}", 
+                        space.as_object().map(|obj| obj.keys().collect::<Vec<_>>()));
                 }
+            } else {
+                warn!("No space found with id: {}", actual_space_id);
             }
+        } else {
+            warn!("Failed to query space owner for space_id: {}", actual_space_id);
         }
 
         // 检查是否为空间成员 - 只需要检查存在性，不需要完整的记录
-        let member_query = "SELECT id FROM space_member WHERE space_id = $space_id AND user_id = $user_id AND status = 'accepted'";
+        let member_query = "SELECT id FROM space_member WHERE space_id = type::thing('space', $space_id) AND user_id = $user_id AND status = 'accepted'";
         let member_result: Vec<serde_json::Value> = self.db.client
             .query(member_query)
-            .bind(("space_id", Thing::from(("space", actual_space_id))))
+            .bind(("space_id", actual_space_id))
             .bind(("user_id", &clean_user_id))
             .await
             .map_err(|e| AppError::Database(e))?
@@ -100,16 +120,18 @@ impl SpaceMemberService {
         } else {
             space_id
         };
+        
+        info!("Processing space_id: {} -> actual_space_id: {}", space_id, actual_space_id);
 
         // 清理user_id格式，确保和数据库存储格式一致
         let clean_user_id = clean_user_id_format(user_id);
         info!("Checking permission '{}' for clean_user_id: {} (original: {}) in space: {}", permission, clean_user_id, user_id, actual_space_id);
 
         // 首先检查是否为空间所有者
-        let owner_query = "SELECT owner_id FROM space WHERE id = $space_id";
+        let owner_query = "SELECT * FROM space WHERE id = type::thing('space', $space_id)";
         let mut owner_result = self.db.client
             .query(owner_query)
-            .bind(("space_id", Thing::from(("space", actual_space_id))))
+            .bind(("space_id", actual_space_id))
             .await
             .map_err(|e| AppError::Database(e))?;
 
@@ -118,19 +140,27 @@ impl SpaceMemberService {
                 if let Some(owner_id) = space.get("owner_id").and_then(|v| v.as_str()) {
                     // 比较owner_id时也需要考虑格式一致性
                     let clean_owner_id = clean_user_id_format(owner_id);
+                    info!("Permission check - space_id: {}, owner_id: {}, clean_owner_id: {}, user_id: {}, clean_user_id: {}", 
+                        actual_space_id, owner_id, clean_owner_id, user_id, clean_user_id);
                     if clean_owner_id == clean_user_id {
                         info!("User is space owner, granting permission");
                         return Ok(true); // 所有者拥有所有权限
                     }
+                } else {
+                    warn!("Failed to get owner_id from space record in permission check");
                 }
+            } else {
+                warn!("No space found with id: {} in permission check", actual_space_id);
             }
+        } else {
+            warn!("Failed to query space owner for space_id: {} in permission check", actual_space_id);
         }
 
         // 检查成员权限
-        let member_query = "SELECT role, permissions FROM space_member WHERE space_id = $space_id AND user_id = $user_id AND status = 'accepted'";
+        let member_query = "SELECT role, permissions FROM space_member WHERE space_id = type::thing('space', $space_id) AND user_id = $user_id AND status = 'accepted'";
         let members: Vec<serde_json::Value> = self.db.client
             .query(member_query)
-            .bind(("space_id", Thing::from(("space", actual_space_id))))
+            .bind(("space_id", actual_space_id))
             .bind(("user_id", &clean_user_id))
             .await
             .map_err(|e| AppError::Database(e))?
@@ -426,6 +456,8 @@ impl SpaceMemberService {
         } else {
             space_id
         };
+        
+        info!("Processing space_id: {} -> actual_space_id: {}", space_id, actual_space_id);
 
         let query = "SELECT * FROM space_member WHERE space_id = $space_id ORDER BY created_at ASC";
         let members: Vec<SpaceMemberDb> = self.db.client
@@ -457,6 +489,8 @@ impl SpaceMemberService {
         } else {
             space_id
         };
+        
+        info!("Processing space_id: {} -> actual_space_id: {}", space_id, actual_space_id);
 
         // 获取当前成员信息
         let query = "SELECT * FROM space_member WHERE space_id = $space_id AND user_id = $user_id";
@@ -522,6 +556,8 @@ impl SpaceMemberService {
         } else {
             space_id
         };
+        
+        info!("Processing space_id: {} -> actual_space_id: {}", space_id, actual_space_id);
 
         // 删除成员记录
         let _: Option<SpaceMemberDb> = self.db.client
@@ -605,6 +641,8 @@ impl SpaceMemberService {
         } else {
             space_id
         };
+        
+        info!("Processing space_id: {} -> actual_space_id: {}", space_id, actual_space_id);
         
         let query = "SELECT name FROM space WHERE id = $space_id";
         let mut response = self.db.client
